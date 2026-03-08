@@ -1,0 +1,21 @@
+services:
+  node:
+    command:
+      - node-subtensor
+      - --chain
+      - finney
+      - --base-path
+      - /data
+      - --bootnodes
+      - /dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
+      - --pruning
+      - archive
+      - --no-mdns
+      - --rpc-external
+      - --rpc-cors
+      - all
+      - --unsafe-rpc-external
+      - --rpc-port
+      - "9944"
+      - --ws-max-connections
+      - "10000"

@@ -1,0 +1,66 @@
+services:
+  gateway:
+    image: nginx:alpine
+    volumes:
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./gateway/miner-gateway.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
+      - ./gateway/entrypoint.sh:/docker-entrypoint.d/90-blockmachine.sh:ro
+      - certbot_webroot:/var/www/certbot:ro
+    environment:
+      SECRET_V1: ${SECRET_V1}
+      SECRET_V2: ${SECRET_V2:-}
+      BACKEND_HOST: node
+      BACKEND_PORT: ${BACKEND_PORT:-9944}
+      SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
+      SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}
+    ports:
+      - "443:443"
+      - "80:80"
+    depends_on:
+      - node
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  node:
+    image: ghcr.io/opentensor/subtensor:v3.2.9-326
+    command:
+      - --base-path
+      - /tmp/blockchain
+      - --chain
+      - chainspecs/raw_spec_finney.json
+      - --bootnodes
+      - /dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
+      - --sync
+      - warp
+      - --no-mdns
+      - --rpc-external
+      - --rpc-cors
+      - all
+      - --unsafe-rpc-external
+      - --rpc-max-connections
+      - "10000"
+      - --in-peers
+      - "500"
+      - --out-peers
+      - "500"
+      - --database
+      - paritydb
+    ports:
+      - "30333:30333"
+    volumes:
+      - node_data:/tmp/blockchain
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"system_health\",\"params\":[],\"id\":1}' http://localhost:9944 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  node_data:
+  certbot_webroot:

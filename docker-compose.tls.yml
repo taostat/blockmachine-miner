@@ -1,0 +1,40 @@
+services:
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - ./ssl:/etc/nginx/ssl
+      - certbot_webroot:/var/www/certbot
+      - certbot_etc:/etc/letsencrypt
+    environment:
+      DOMAIN: ${DOMAIN}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        # Initial issuance (skip if cert already exists and is valid)
+        if ! openssl x509 -in /etc/nginx/ssl/cert.pem -noout -issuer 2>/dev/null | grep -q "Let's Encrypt"; then
+          certbot certonly --webroot -w /var/www/certbot \
+            -d "$${DOMAIN}" \
+            --non-interactive --agree-tos \
+            --register-unsafely-without-email \
+            --cert-name blockmachine
+          cp /etc/letsencrypt/live/blockmachine/fullchain.pem /etc/nginx/ssl/cert.pem
+          cp /etc/letsencrypt/live/blockmachine/privkey.pem /etc/nginx/ssl/key.pem
+          echo "Certificate issued for $${DOMAIN}"
+        else
+          echo "Valid Let's Encrypt certificate found, skipping issuance"
+        fi
+        # Renewal loop: check every 12 hours
+        while true; do
+          sleep 43200
+          certbot renew --quiet
+          cp /etc/letsencrypt/live/blockmachine/fullchain.pem /etc/nginx/ssl/cert.pem
+          cp /etc/letsencrypt/live/blockmachine/privkey.pem /etc/nginx/ssl/key.pem
+          echo "Renewal check complete at $$(date -u)"
+        done
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+volumes:
+  certbot_etc:
