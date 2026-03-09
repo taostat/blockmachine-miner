@@ -56,6 +56,12 @@ bm --testnet miner add --endpoint wss://... --alias my-node --secret '...' --pri
 
 For mainnet (the default), use `bm` without the flag. The install script prints the correct commands for whichever network you choose.
 
+**Testnet requirement:** You need a Bittensor hotkey registered as a miner on **netuid 417** (the Blockmachine testnet subnet). Register your hotkey before running the install script:
+
+```bash
+btcli subnet register --netuid 417 --subtensor.network test
+```
+
 ### Authenticate
 
 ```bash

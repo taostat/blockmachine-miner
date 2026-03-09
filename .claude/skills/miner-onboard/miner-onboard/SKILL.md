@@ -16,7 +16,17 @@ Collect from the user:
 - **Alias**: Friendly name (e.g. `eu-lite-1`)
 - **Secret**: Bearer token from the server's `.env` (`SECRET_V1`)
 - **Price**: USD per compute unit (e.g. `0.01`)
+- **Network**: Testnet or mainnet
+
 If the user provides all values, skip prompting. If some are missing, ask.
+
+**Testnet prerequisite:** If the user is mining on testnet, they need a Bittensor hotkey registered as a miner on **netuid 417** (the Blockmachine testnet subnet). Verify this is done before proceeding:
+
+```bash
+btcli subnet register --netuid 417 --subtensor.network test
+```
+
+All testnet CLI commands require the `--testnet` flag (e.g. `bm --testnet miner add ...`).
 
 ### 2. Verify the miner server is reachable
 
