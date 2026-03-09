@@ -277,8 +277,8 @@ print_registration() {
   echo ""
   echo "Register this node from your local machine:"
   echo ""
-  echo "  bm miner login"
-  echo "  bm miner add --endpoint '${endpoint}' --alias ${alias} --secret '${secret}' --price <usd-per-cu>"
+  echo "  ${bm_prefix} miner login"
+  echo "  ${bm_prefix} miner add --endpoint '${endpoint}' --alias ${alias} --secret '${secret}' --price <usd-per-cu>"
   echo ""
   echo "Install the CLI (requires Python 3.10+):"
   echo "  pip install blockmachine"
@@ -298,6 +298,17 @@ check_command openssl "Install openssl to generate certificates."
 check_system
 
 # ── Interactive: gather all user input ────────────────────────────
+
+# Network
+network="mainnet"
+if prompt_yn "Use testnet?"; then
+  network="testnet"
+fi
+
+bm_prefix="bm"
+if [ "$network" = "testnet" ]; then
+  bm_prefix="bm --testnet"
+fi
 
 # TLS / endpoint
 use_certbot=false

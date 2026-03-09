@@ -45,10 +45,22 @@ The CLI requires Python 3.10+ and can run anywhere — your laptop, a management
 pip install blockmachine
 ```
 
+### Testnet vs Mainnet
+
+The install script asks whether you're running on testnet or mainnet. For testnet, all `bm` CLI commands require the `--testnet` flag:
+
+```bash
+bm --testnet miner login
+bm --testnet miner add --endpoint wss://... --alias my-node --secret '...' --price 0.01
+```
+
+For mainnet (the default), use `bm` without the flag. The install script prints the correct commands for whichever network you choose.
+
 ### Authenticate
 
 ```bash
-bm miner login
+bm miner login              # mainnet
+bm --testnet miner login    # testnet
 ```
 
 This uses a device authorization flow: the CLI displays a URL and code, then polls until you approve in a browser. The browser does not need to be on the same machine — you can run `bm miner login` on a headless server and open the URL on your phone or laptop. If a browser is available locally, it opens automatically.
@@ -86,7 +98,7 @@ At the end you'll see output like:
 
 Now run these commands on your local machine:
 
-  bm miner login
+  bm miner login                    # or: bm --testnet miner login
   bm miner add --endpoint wss://203.0.113.50 --alias tao-203-0-113-50 --secret '<secret from .env>' --price <usd-per-cu>
 ```
 
@@ -96,6 +108,13 @@ Using the CLI (wherever you installed it), register your node with the secret fr
 
 ```bash
 bm miner add \
+  --endpoint wss://203.0.113.50 \
+  --alias my-node \
+  --secret '<SECRET_V1 from your server .env>' \
+  --price 0.01
+
+# For testnet, prefix with --testnet:
+bm --testnet miner add \
   --endpoint wss://203.0.113.50 \
   --alias my-node \
   --secret '<SECRET_V1 from your server .env>' \
@@ -217,6 +236,10 @@ Then register from your local machine:
 ```bash
 bm miner login
 bm miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" --price 0.01
+
+# For testnet:
+bm --testnet miner login
+bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" --price 0.01
 ```
 
 ## Architecture
@@ -317,6 +340,8 @@ docker compose down
 Node data is persisted in a Docker volume (`node_data`). Restarting will resume from where it left off.
 
 ## CLI reference
+
+All commands below default to mainnet. Add `--testnet` after `bm` for testnet: `bm --testnet miner ...`
 
 ```bash
 # Authentication
