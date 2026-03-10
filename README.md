@@ -146,10 +146,19 @@ Check sync progress (on your server):
 docker compose logs -f node
 ```
 
-Once synced, the gateway will start routing traffic to your node. Monitor your status via the CLI:
+Once synced, the gateway will start routing traffic to your node. Verify everything is working:
 
 ```bash
-bm miner show
+bm miner test <alias>              # Test TLS, health, and authenticated RPC
+bm miner show                      # Check status and last seen timestamp
+```
+
+`bm miner test` runs three checks: TLS handshake on port 443, health endpoint on port 80, and an authenticated `system_health` RPC call. You can also test before registering with `bm miner test --endpoint <url> --secret '<secret>'`.
+
+Once traffic is flowing, check your node's performance:
+
+```bash
+bm miner metrics [alias]           # Quality score, latency, success rate
 ```
 
 ## Pricing
@@ -319,6 +328,7 @@ Environment variables in `.env`:
 ```bash
 bm miner show                      # Node status, endpoint, last seen
 bm miner ls                        # List all your nodes
+bm miner metrics [alias]           # Quality score, latency, success rate
 docker compose logs -f              # Container logs
 curl -sf http://localhost/health    # Gateway health check
 ```
@@ -367,6 +377,11 @@ bm miner rm [alias]                    # Remove a node
 bm miner secret set [alias]            # Set bearer token secret
 bm miner secret show [alias]           # Show secret metadata
 bm miner secret promote [alias]        # Promote next secret to active
+
+# Testing & metrics
+bm miner test <alias>                  # Test TLS, health, and auth RPC
+bm miner test --endpoint <url> --secret '<secret>'  # Test before registering
+bm miner metrics [alias]              # Quality score, latency, success rate
 
 # Pricing
 bm miner price set [alias] --price ... # Set price per compute unit
