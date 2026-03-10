@@ -39,7 +39,7 @@ Any VPS or dedicated server with Docker will work. The install script handles al
 
 ### Install the Blockmachine CLI
 
-The CLI requires Python 3.10+ and can run anywhere — your laptop, a management server, or on the miner node itself. It's the control plane for registering nodes, managing secrets, and setting prices across your fleet without SSH-ing into each machine.
+The CLI requires Python 3.10+ and can run anywhere — your laptop, a management server, or on the miner node itself. It's the control panel for registering nodes, managing secrets, and setting prices across your fleet without SSH-ing into each machine.
 
 ```bash
 pip install blockmachine
