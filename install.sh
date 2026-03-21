@@ -348,15 +348,13 @@ if [ "$archive" = true ]; then
   echo "  Archive node requires ~2 TB disk and may take 6-12 hours to sync."
 fi
 
-# Snapshot (archive nodes only)
+# Snapshot
 snapshot_url=""
-if [ "$archive" = true ]; then
-  echo ""
-  echo "Speed up sync by restoring a snapshot."
-  echo "Get a snapshot URL: bm miner snapshot (on your local machine)"
-  echo ""
-  snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
-fi
+echo ""
+echo "Speed up sync by restoring a snapshot."
+echo "Get a snapshot URL: bm miner snapshot (on your local machine)"
+echo ""
+snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
 
 # Alias
 echo ""
@@ -389,6 +387,12 @@ if ! command -v docker >/dev/null; then
   install_docker
 fi
 check_compose_version
+
+# Stop existing services if re-running (so port checks pass)
+if [ -f "${INSTALL_DIR}/docker-compose.yml" ]; then
+  info "Stopping existing services for re-install..."
+  docker compose -f "${INSTALL_DIR}/docker-compose.yml" down 2>/dev/null || true
+fi
 check_port 80
 check_port 443
 
@@ -431,42 +435,46 @@ print_registration
 
 # Restore snapshot if provided
 if [ -n "$snapshot_url" ]; then
-  if ! command -v zstd >/dev/null; then
-    info "Installing zstd..."
-    apt-get install -y -qq zstd >/dev/null 2>&1 ||
-      error "Failed to install zstd. Install manually: apt install zstd"
+  # Detect compression from URL
+  case "$snapshot_url" in
+    *.tar.lz4*)
+      decompress_cmd="lz4 -dc"
+      decompress_pkg="lz4"
+      snapshot_file="snapshot.tar.lz4"
+      ;;
+    *)
+      decompress_cmd="zstd -d --stdout"
+      decompress_pkg="zstd"
+      snapshot_file="snapshot.tar.zst"
+      ;;
+  esac
+
+  if ! command -v "${decompress_cmd%% *}" >/dev/null; then
+    info "Installing ${decompress_pkg}..."
+    apt-get install -y -qq "$decompress_pkg" >/dev/null 2>&1 ||
+      error "Failed to install ${decompress_pkg}. Install manually: apt install ${decompress_pkg}"
   fi
 
-  # Derive checksum URL from snapshot URL (same directory)
-  checksum_url="${snapshot_url%snapshot.tar.zst*}sha256sum.txt${snapshot_url#*snapshot.tar.zst}"
-
-  if [ -f snapshot.tar.zst ] && [ -s snapshot.tar.zst ]; then
-    info "Snapshot file found, skipping download"
-  else
-    info "Downloading snapshot..."
-    curl -fL "$snapshot_url" -o snapshot.tar.zst ||
-      error "Failed to download snapshot"
+  if [ -f "$snapshot_file" ] && [ -s "$snapshot_file" ]; then
+    info "Snapshot file found, resuming/skipping download"
   fi
 
-  info "Verifying checksum..."
-  expected=$(curl -sf "$checksum_url") || true
-  if [ -n "$expected" ]; then
-    actual=$(sha256sum snapshot.tar.zst | awk '{print $1}')
-    if [ "$expected" != "$actual" ]; then
-      error "Checksum mismatch — snapshot may be corrupted. Delete snapshot.tar.zst and try again."
-    fi
-    info "Checksum verified"
-  else
-    warn "No checksum available, skipping verification"
-  fi
+  info "Downloading snapshot (this will take a while)..."
+  curl -fL -C - "$snapshot_url" -o "$snapshot_file" ||
+    error "Download failed. Re-run the installer to resume where you left off."
 
   info "Creating data volume and restoring snapshot..."
   docker volume create blockmachine-miner_node_data >/dev/null 2>&1 || true
-  zstd -d snapshot.tar.zst --stdout | \
-    docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data
-  rm -f snapshot.tar.zst
-
-  info "Snapshot restored"
+  if $decompress_cmd "$snapshot_file" | \
+    docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
+    rm -f "$snapshot_file"
+    info "Snapshot restored"
+  else
+    warn "Snapshot restore failed. The downloaded file has been kept."
+    echo "    Re-run the installer to retry, or restore manually:"
+    echo "    $decompress_cmd $snapshot_file | docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data"
+    error "Snapshot restore failed"
+  fi
 fi
 
 # Start services
