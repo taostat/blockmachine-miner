@@ -348,13 +348,15 @@ if [ "$archive" = true ]; then
   echo "  Archive node requires ~2 TB disk and may take 6-12 hours to sync."
 fi
 
-# Snapshot
+# Snapshot (archive nodes only)
 snapshot_url=""
-echo ""
-echo "Speed up sync by restoring a snapshot."
-echo "Get a snapshot URL: bm miner snapshot (on your local machine)"
-echo ""
-snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
+if [ "$archive" = true ]; then
+  echo ""
+  echo "Speed up sync by restoring a snapshot."
+  echo "Get a snapshot URL: bm miner snapshot (on your local machine)"
+  echo ""
+  snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
+fi
 
 # Alias
 echo ""
