@@ -345,7 +345,8 @@ esac
 
 if [ "$archive" = true ]; then
   echo ""
-  echo "  Archive node uses RocksDB and requires ~2 TB disk."
+  echo "  Archive node uses RocksDB. The chain data is currently ~3.2 TB and growing."
+  echo "  You will need at least 2x that (~6.5 TB) for snapshot extraction."
   echo "  May take 6-12 hours to sync without a snapshot."
 fi
 
