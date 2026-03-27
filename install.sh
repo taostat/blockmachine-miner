@@ -352,13 +352,13 @@ fi
 
 # Snapshot (archive nodes only)
 snapshot_url=""
+snapshot_stream=false
 if [ "$archive" = true ]; then
   echo ""
   echo "Speed up sync by restoring a snapshot."
   echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
   echo ""
   snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
-  snapshot_stream=false
 
   if [ -n "$snapshot_url" ]; then
     echo ""
@@ -367,19 +367,17 @@ if [ "$archive" = true ]; then
     echo "    2) Stream directly — requires ~1x disk, must restart from scratch if interrupted"
     restore_method=$(prompt_value "Choose restore method" "1")
     case "$restore_method" in
-      2*) snapshot_stream=true ;;
+      2) snapshot_stream=true ;;
     esac
 
     if [ "$snapshot_stream" = false ]; then
-      # Check disk space: download mode needs ~2.5x the compressed
-      # snapshot size for the file + extraction + compaction headroom
       snapshot_bytes=$(curl -sI -L "$snapshot_url" 2>/dev/null \
         | grep -i '^content-length:' | tail -1 \
         | tr -dc '0-9')
       if [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ]; then
         required_bytes=$(( snapshot_bytes * 5 / 2 ))
-        available_bytes=$(df --output=avail -B1 . 2>/dev/null \
-          | tail -1 | tr -dc '0-9')
+        available_bytes=$(df -k . 2>/dev/null | tail -1 | awk '{print $4}')
+        available_bytes=$(( available_bytes * 1024 ))
         if [ -n "$available_bytes" ] && \
            [ "$available_bytes" -lt "$required_bytes" ]; then
           required_gb=$(( required_bytes / 1073741824 ))
@@ -495,13 +493,15 @@ if [ -n "$snapshot_url" ]; then
       error "Failed to install ${decompress_pkg}. Install manually: apt install ${decompress_pkg}"
   fi
 
+  volume_name="blockmachine-miner_node_data"
+  restore_cmd="docker run --rm -i -v ${volume_name}:/data alpine tar xf - -C /data"
+
   info "Creating data volume..."
-  docker volume create blockmachine-miner_node_data >/dev/null 2>&1 || true
+  docker volume create "$volume_name" >/dev/null 2>&1 || true
 
   if [ "$snapshot_stream" = true ]; then
-    info "Streaming snapshot directly (no resume if interrupted)..."
-    if curl -fL "$snapshot_url" | $decompress_cmd | \
-      docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
+    info "Streaming snapshot directly..."
+    if curl -fL "$snapshot_url" | $decompress_cmd | $restore_cmd; then
       info "Snapshot restored"
     else
       error "Stream restore failed. Re-run the installer to try again."
@@ -511,18 +511,17 @@ if [ -n "$snapshot_url" ]; then
       info "Snapshot file found, resuming/skipping download"
     fi
 
-    info "Downloading snapshot (this will take a while)..."
+    info "Downloading snapshot..."
     curl -fL -C - "$snapshot_url" -o "$snapshot_file" ||
       error "Download failed. Re-run the installer to resume where you left off."
 
     info "Restoring snapshot..."
-    if $decompress_cmd "$snapshot_file" | \
-      docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
+    if $decompress_cmd "$snapshot_file" | $restore_cmd; then
       info "Snapshot restored (keeping file until node is healthy)"
     else
       warn "Snapshot restore failed. The downloaded file has been kept."
       echo "    Re-run the installer to retry, or restore manually:"
-      echo "    $decompress_cmd $snapshot_file | docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data"
+      echo "    $decompress_cmd $snapshot_file | $restore_cmd"
       error "Snapshot restore failed"
     fi
   fi
