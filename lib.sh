@@ -170,6 +170,10 @@ check_snapshot_disk_space() {
   local required_bytes=$(( snapshot_bytes * 5 / 2 ))
   local available_kb
   local check_dir="${INSTALL_DIR:-.}"
+  # Fall back to parent if INSTALL_DIR doesn't exist yet (fresh install)
+  if [ ! -d "$check_dir" ]; then
+    check_dir="$(dirname "$check_dir")"
+  fi
   available_kb=$(df -k "$check_dir" 2>/dev/null | tail -1 | awk '{print $4}')
   [ -n "$available_kb" ] || return 0
 

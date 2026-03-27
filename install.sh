@@ -6,6 +6,7 @@ set -euo pipefail
 # No Python or CLI required — just Docker.
 
 # Source lib.sh — handle both local clone and bash <(curl ...) paths
+LIB_URL="https://blockmachine.io/miner/lib.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || SCRIPT_DIR=""
 if [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/lib.sh" ]; then
   # shellcheck source=lib.sh
@@ -14,10 +15,10 @@ elif [ -f "${INSTALL_DIR:-/root/blockmachine-miner}/lib.sh" ]; then
   # shellcheck source=lib.sh
   source "${INSTALL_DIR:-/root/blockmachine-miner}/lib.sh"
 else
-  # Piped via curl — download lib.sh to a temp file
+  # Piped via curl — fetch lib.sh from the same origin as install.sh
   LIB_TMP=$(mktemp)
-  curl -fsSL "https://raw.githubusercontent.com/taostat/blockmachine-miner/main/lib.sh" -o "$LIB_TMP" ||
-    { echo "ERROR: Could not download lib.sh" >&2; exit 1; }
+  curl -fsSL "$LIB_URL" -o "$LIB_TMP" ||
+    { echo "ERROR: Could not download lib.sh from ${LIB_URL}" >&2; exit 1; }
   # shellcheck source=lib.sh
   source "$LIB_TMP"
   rm -f "$LIB_TMP"
