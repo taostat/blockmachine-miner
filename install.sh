@@ -345,7 +345,8 @@ esac
 
 if [ "$archive" = true ]; then
   echo ""
-  echo "  Archive node requires ~2 TB disk and may take 6-12 hours to sync."
+  echo "  Archive node uses RocksDB and requires ~2 TB disk."
+  echo "  May take 6-12 hours to sync without a snapshot."
 fi
 
 # Snapshot (archive nodes only)
@@ -353,9 +354,33 @@ snapshot_url=""
 if [ "$archive" = true ]; then
   echo ""
   echo "Speed up sync by restoring a snapshot."
-  echo "Get a snapshot URL: bm miner snapshot (on your local machine)"
+  echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
   echo ""
   snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
+
+  if [ -n "$snapshot_url" ]; then
+    # Check disk space: archive RocksDB needs ~2.5x the compressed
+    # snapshot size for download + extraction + compaction headroom
+    snapshot_bytes=$(curl -sI -L "$snapshot_url" 2>/dev/null \
+      | grep -i '^content-length:' | tail -1 \
+      | tr -dc '0-9')
+    if [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ]; then
+      required_bytes=$(( snapshot_bytes * 5 / 2 ))
+      available_bytes=$(df --output=avail -B1 . 2>/dev/null \
+        | tail -1 | tr -dc '0-9')
+      if [ -n "$available_bytes" ] && \
+         [ "$available_bytes" -lt "$required_bytes" ]; then
+        required_gb=$(( required_bytes / 1073741824 ))
+        available_gb=$(( available_bytes / 1073741824 ))
+        warn "Disk space may be insufficient for snapshot restore."
+        echo "    Available: ${available_gb} GB"
+        echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
+        if ! prompt_yn "Continue anyway?"; then
+          error "Aborting. Free up disk space and re-run."
+        fi
+      fi
+    fi
+  fi
 fi
 
 # Alias
@@ -469,8 +494,7 @@ if [ -n "$snapshot_url" ]; then
   docker volume create blockmachine-miner_node_data >/dev/null 2>&1 || true
   if $decompress_cmd "$snapshot_file" | \
     docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
-    rm -f "$snapshot_file"
-    info "Snapshot restored"
+    info "Snapshot restored (keeping file until node is healthy)"
   else
     warn "Snapshot restore failed. The downloaded file has been kept."
     echo "    Re-run the installer to retry, or restore manually:"
@@ -493,9 +517,17 @@ $compose_cmd up -d
 
 if wait_for_health; then
   info "Gateway is healthy"
+  if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
+    rm -f "$snapshot_file"
+    info "Snapshot file removed"
+  fi
 else
   warn "Gateway not yet healthy. The subtensor node may still be syncing."
   echo "    Check status: docker compose logs -f"
+  if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
+    warn "Keeping snapshot file until node is confirmed healthy."
+    echo "    Remove manually once healthy: rm $snapshot_file"
+  fi
 fi
 
 if [ "$use_certbot" = true ]; then
