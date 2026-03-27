@@ -6,7 +6,7 @@ set -euo pipefail
 # No Python or CLI required — just Docker.
 
 # Source lib.sh — handle both local clone and bash <(curl ...) paths
-LIB_URL="https://blockmachine.io/miner/lib.sh"
+LIB_URL="https://raw.githubusercontent.com/taostat/blockmachine-miner/main/lib.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || SCRIPT_DIR=""
 if [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/lib.sh" ]; then
   # shellcheck source=lib.sh
