@@ -165,6 +165,32 @@ prompt_value() {
   echo "${value:-$default}"
 }
 
+check_snapshot_disk_space() {
+  local url="$1"
+  local snapshot_bytes
+  snapshot_bytes=$(curl -sI -L "$url" 2>/dev/null \
+    | grep -i '^content-length:' | tail -1 \
+    | tr -dc '0-9')
+  [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ] || return 0
+
+  local required_bytes=$(( snapshot_bytes * 5 / 2 ))
+  local available_kb
+  available_kb=$(df -k . 2>/dev/null | tail -1 | awk '{print $4}')
+  [ -n "$available_kb" ] || return 0
+
+  local available_bytes=$(( available_kb * 1024 ))
+  [ "$available_bytes" -lt "$required_bytes" ] || return 0
+
+  local required_gb=$(( required_bytes / 1073741824 ))
+  local available_gb=$(( available_bytes / 1073741824 ))
+  warn "Disk space may be insufficient for snapshot restore."
+  echo "    Available: ${available_gb} GB"
+  echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
+  if ! prompt_yn "Continue anyway?"; then
+    error "Aborting. Free up disk space and re-run."
+  fi
+}
+
 write_env() {
   local env_file="$1" secret="$2" domain="${3:-}"
   cat > "$env_file" <<EOF
@@ -359,38 +385,20 @@ if [ "$archive" = true ]; then
   echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
   echo ""
   snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
+fi
 
-  if [ -n "$snapshot_url" ]; then
-    echo ""
-    echo "  Restore method:"
-    echo "    1) Download first — requires ~2x disk, supports resume if connection drops"
-    echo "    2) Stream directly — requires ~1x disk, must restart from scratch if interrupted"
-    restore_method=$(prompt_value "Choose restore method" "1")
-    case "$restore_method" in
-      2) snapshot_stream=true ;;
-    esac
+if [ -n "$snapshot_url" ]; then
+  echo ""
+  echo "  Restore method:"
+  echo "    1) Download first — requires ~2x disk, supports resume if connection drops"
+  echo "    2) Stream directly — requires ~1x disk, must restart from scratch if interrupted"
+  restore_method=$(prompt_value "Choose restore method" "1")
+  case "$restore_method" in
+    2) snapshot_stream=true ;;
+  esac
 
-    if [ "$snapshot_stream" = false ]; then
-      snapshot_bytes=$(curl -sI -L "$snapshot_url" 2>/dev/null \
-        | grep -i '^content-length:' | tail -1 \
-        | tr -dc '0-9')
-      if [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ]; then
-        required_bytes=$(( snapshot_bytes * 5 / 2 ))
-        available_bytes=$(df -k . 2>/dev/null | tail -1 | awk '{print $4}')
-        available_bytes=$(( available_bytes * 1024 ))
-        if [ -n "$available_bytes" ] && \
-           [ "$available_bytes" -lt "$required_bytes" ]; then
-          required_gb=$(( required_bytes / 1073741824 ))
-          available_gb=$(( available_bytes / 1073741824 ))
-          warn "Disk space may be insufficient for snapshot restore."
-          echo "    Available: ${available_gb} GB"
-          echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
-          if ! prompt_yn "Continue anyway?"; then
-            error "Aborting. Free up disk space and re-run."
-          fi
-        fi
-      fi
-    fi
+  if [ "$snapshot_stream" = false ]; then
+    check_snapshot_disk_space "$snapshot_url"
   fi
 fi
 
