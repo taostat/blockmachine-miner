@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 
 setup() {
-  # Source lib.sh without triggering install
-  source "${BATS_TEST_DIRNAME}/../lib.sh"
+  # Source install.sh — main guard prevents execution
+  source "${BATS_TEST_DIRNAME}/../install.sh"
 }
 
 # --- is_ipv4 ---
