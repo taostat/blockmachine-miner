@@ -358,26 +358,38 @@ if [ "$archive" = true ]; then
   echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
   echo ""
   snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
+  snapshot_stream=false
 
   if [ -n "$snapshot_url" ]; then
-    # Check disk space: archive RocksDB needs ~2.5x the compressed
-    # snapshot size for download + extraction + compaction headroom
-    snapshot_bytes=$(curl -sI -L "$snapshot_url" 2>/dev/null \
-      | grep -i '^content-length:' | tail -1 \
-      | tr -dc '0-9')
-    if [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ]; then
-      required_bytes=$(( snapshot_bytes * 5 / 2 ))
-      available_bytes=$(df --output=avail -B1 . 2>/dev/null \
-        | tail -1 | tr -dc '0-9')
-      if [ -n "$available_bytes" ] && \
-         [ "$available_bytes" -lt "$required_bytes" ]; then
-        required_gb=$(( required_bytes / 1073741824 ))
-        available_gb=$(( available_bytes / 1073741824 ))
-        warn "Disk space may be insufficient for snapshot restore."
-        echo "    Available: ${available_gb} GB"
-        echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
-        if ! prompt_yn "Continue anyway?"; then
-          error "Aborting. Free up disk space and re-run."
+    echo ""
+    echo "  Restore method:"
+    echo "    1) Download first — requires ~2x disk, supports resume if connection drops"
+    echo "    2) Stream directly — requires ~1x disk, must restart from scratch if interrupted"
+    restore_method=$(prompt_value "Choose restore method" "1")
+    case "$restore_method" in
+      2*) snapshot_stream=true ;;
+    esac
+
+    if [ "$snapshot_stream" = false ]; then
+      # Check disk space: download mode needs ~2.5x the compressed
+      # snapshot size for the file + extraction + compaction headroom
+      snapshot_bytes=$(curl -sI -L "$snapshot_url" 2>/dev/null \
+        | grep -i '^content-length:' | tail -1 \
+        | tr -dc '0-9')
+      if [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ]; then
+        required_bytes=$(( snapshot_bytes * 5 / 2 ))
+        available_bytes=$(df --output=avail -B1 . 2>/dev/null \
+          | tail -1 | tr -dc '0-9')
+        if [ -n "$available_bytes" ] && \
+           [ "$available_bytes" -lt "$required_bytes" ]; then
+          required_gb=$(( required_bytes / 1073741824 ))
+          available_gb=$(( available_bytes / 1073741824 ))
+          warn "Disk space may be insufficient for snapshot restore."
+          echo "    Available: ${available_gb} GB"
+          echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
+          if ! prompt_yn "Continue anyway?"; then
+            error "Aborting. Free up disk space and re-run."
+          fi
         fi
       fi
     fi
@@ -483,24 +495,36 @@ if [ -n "$snapshot_url" ]; then
       error "Failed to install ${decompress_pkg}. Install manually: apt install ${decompress_pkg}"
   fi
 
-  if [ -f "$snapshot_file" ] && [ -s "$snapshot_file" ]; then
-    info "Snapshot file found, resuming/skipping download"
-  fi
-
-  info "Downloading snapshot (this will take a while)..."
-  curl -fL -C - "$snapshot_url" -o "$snapshot_file" ||
-    error "Download failed. Re-run the installer to resume where you left off."
-
-  info "Creating data volume and restoring snapshot..."
+  info "Creating data volume..."
   docker volume create blockmachine-miner_node_data >/dev/null 2>&1 || true
-  if $decompress_cmd "$snapshot_file" | \
-    docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
-    info "Snapshot restored (keeping file until node is healthy)"
+
+  if [ "$snapshot_stream" = true ]; then
+    info "Streaming snapshot directly (no resume if interrupted)..."
+    if curl -fL "$snapshot_url" | $decompress_cmd | \
+      docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
+      info "Snapshot restored"
+    else
+      error "Stream restore failed. Re-run the installer to try again."
+    fi
   else
-    warn "Snapshot restore failed. The downloaded file has been kept."
-    echo "    Re-run the installer to retry, or restore manually:"
-    echo "    $decompress_cmd $snapshot_file | docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data"
-    error "Snapshot restore failed"
+    if [ -f "$snapshot_file" ] && [ -s "$snapshot_file" ]; then
+      info "Snapshot file found, resuming/skipping download"
+    fi
+
+    info "Downloading snapshot (this will take a while)..."
+    curl -fL -C - "$snapshot_url" -o "$snapshot_file" ||
+      error "Download failed. Re-run the installer to resume where you left off."
+
+    info "Restoring snapshot..."
+    if $decompress_cmd "$snapshot_file" | \
+      docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data; then
+      info "Snapshot restored (keeping file until node is healthy)"
+    else
+      warn "Snapshot restore failed. The downloaded file has been kept."
+      echo "    Re-run the installer to retry, or restore manually:"
+      echo "    $decompress_cmd $snapshot_file | docker run --rm -i -v blockmachine-miner_node_data:/data alpine tar xf - -C /data"
+      error "Snapshot restore failed"
+    fi
   fi
 fi
 
