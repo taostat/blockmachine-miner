@@ -5,9 +5,23 @@ set -euo pipefail
 # Sets up the gateway + subtensor node on this server.
 # No Python or CLI required — just Docker.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib.sh
-source "${SCRIPT_DIR}/lib.sh"
+# Source lib.sh — handle both local clone and bash <(curl ...) paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || SCRIPT_DIR=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/lib.sh" ]; then
+  # shellcheck source=lib.sh
+  source "${SCRIPT_DIR}/lib.sh"
+elif [ -f "${INSTALL_DIR:-/root/blockmachine-miner}/lib.sh" ]; then
+  # shellcheck source=lib.sh
+  source "${INSTALL_DIR:-/root/blockmachine-miner}/lib.sh"
+else
+  # Piped via curl — download lib.sh to a temp file
+  LIB_TMP=$(mktemp)
+  curl -fsSL "https://raw.githubusercontent.com/taostat/blockmachine-miner/main/lib.sh" -o "$LIB_TMP" ||
+    { echo "ERROR: Could not download lib.sh" >&2; exit 1; }
+  # shellcheck source=lib.sh
+  source "$LIB_TMP"
+  rm -f "$LIB_TMP"
+fi
 
 main() {
   echo ""

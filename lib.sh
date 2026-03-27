@@ -169,7 +169,8 @@ check_snapshot_disk_space() {
 
   local required_bytes=$(( snapshot_bytes * 5 / 2 ))
   local available_kb
-  available_kb=$(df -k . 2>/dev/null | tail -1 | awk '{print $4}')
+  local check_dir="${INSTALL_DIR:-.}"
+  available_kb=$(df -k "$check_dir" 2>/dev/null | tail -1 | awk '{print $4}')
   [ -n "$available_kb" ] || return 0
 
   local available_bytes=$(( available_kb * 1024 ))
