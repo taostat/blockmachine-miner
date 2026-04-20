@@ -1,11 +1,10 @@
 services:
   node:
     command:
-      - node-subtensor
       - --chain
       - finney
       - --base-path
-      - /data
+      - /tmp/blockchain
       - --bootnodes
       - /dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
       - --pruning
@@ -15,7 +14,7 @@ services:
       - --rpc-cors
       - all
       - --unsafe-rpc-external
-      - --rpc-port
-      - "9944"
-      - --ws-max-connections
+      - --rpc-max-connections
       - "10000"
+      - --database
+      - rocksdb

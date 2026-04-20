@@ -12,7 +12,7 @@ set -e
 # Build the SECRET_V2 map line only if it differs from SECRET_V1
 SECRET_V2_LINE=""
 if [ -n "$SECRET_V2" ] && [ "$SECRET_V2" != "$SECRET_V1" ]; then
-    SECRET_V2_LINE="\"Bearer ${SECRET_V2}\" 1;"
+    SECRET_V2_LINE=$(printf '"Bearer %s" 1;' "$SECRET_V2")
 fi
 export SECRET_V2_LINE
 
