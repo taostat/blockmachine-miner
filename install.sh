@@ -167,6 +167,9 @@ prompt_value() {
 
 write_env() {
   local env_file="$1" secret="$2" domain="${3:-}"
+  local git_sha git_branch
+  git_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
   cat > "$env_file" <<EOF
 SECRET_V1=${secret}
 SECRET_V2=
@@ -174,6 +177,8 @@ DOMAIN=${domain}
 BACKEND_PORT=9944
 SSL_CERT_PATH=/etc/nginx/ssl/cert.pem
 SSL_KEY_PATH=/etc/nginx/ssl/key.pem
+BM_MINER_GIT_SHA=${git_sha}
+BM_MINER_GIT_BRANCH=${git_branch}
 EOF
   chmod 600 "$env_file"
 }
