@@ -90,7 +90,11 @@ setup() {
   write_env "$tmpfile" "secret" "test.com"
 
   local perms
-  perms=$(stat -f '%Lp' "$tmpfile" 2>/dev/null || stat -c '%a' "$tmpfile" 2>/dev/null)
+  if stat -c '%a' "$tmpfile" >/dev/null 2>&1; then
+    perms=$(stat -c '%a' "$tmpfile")
+  else
+    perms=$(stat -f '%Lp' "$tmpfile")
+  fi
   [ "$perms" = "600" ]
 
   rm -f "$tmpfile"

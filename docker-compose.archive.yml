@@ -4,7 +4,7 @@ services:
       - --chain
       - finney
       - --base-path
-      - /data
+      - /tmp/blockchain
       - --bootnodes
       - /dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
       - --pruning
