@@ -7,7 +7,6 @@ services:
 
   node:
     command:
-      - node-subtensor
       - --chain
       - finney
       - --base-path
@@ -21,8 +20,6 @@ services:
       - --rpc-cors
       - all
       - --unsafe-rpc-external
-      - --rpc-port
-      - "9944"
       - --rpc-max-connections
       - "10000"
       - --database
