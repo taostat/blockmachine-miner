@@ -11,6 +11,8 @@ services:
       SECRET_V2: ${SECRET_V2:-}
       BACKEND_HOST: node
       BACKEND_PORT: ${BACKEND_PORT:-9944}
+      METRICS_HOST: metrics
+      METRICS_PORT: ${METRICS_PORT:-9100}
       SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
       SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}
     ports:
@@ -18,12 +20,42 @@ services:
       - "80:80"
     depends_on:
       - node
+      - metrics
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  metrics:
+    image: python:3.12-alpine
+    command: ["python", "/app/exporter.py"]
+    volumes:
+      - ./metrics:/app:ro
+      - ./.git:/repo/.git:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - node_data:/node-data:ro
+      - /proc:/host/proc:ro
+    environment:
+      METRICS_PORT: ${METRICS_PORT:-9100}
+      METRICS_SECRET_V1: ${SECRET_V1}
+      METRICS_SECRET_V2: ${SECRET_V2:-}
+      NODE_RPC_URL: http://node:${BACKEND_PORT:-9944}
+      NODE_NATIVE_METRICS_URL: http://node:9615/metrics
+      GATEWAY_HEALTH_URL: http://gateway/health
+      NODE_MODE: lite
+      NODE_SYNC: warp
+      NODE_DATABASE: paritydb
+      NODE_DATA_PATH: /node-data
+      HOST_PROC_PATH: /host/proc
+      GIT_DIR: /repo/.git
+      SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
+      BM_MINER_GIT_SHA: ${BM_MINER_GIT_SHA:-unknown}
+      BM_MINER_GIT_BRANCH: ${BM_MINER_GIT_BRANCH:-unknown}
+    depends_on:
+      - node
+    restart: unless-stopped
 
   node:
     image: ghcr.io/opentensor/subtensor:v3.2.9-326
@@ -49,6 +81,9 @@ services:
       - "500"
       - --database
       - paritydb
+      - --prometheus-external
+      - --prometheus-port
+      - "9615"
     ports:
       - "30333:30333"
     volumes:

@@ -161,6 +161,35 @@ Once traffic is flowing, check your node's performance:
 bm miner metrics [alias]           # Quality score, latency, success rate
 ```
 
+### Prometheus metrics
+
+Each miner exposes authenticated Prometheus metrics through the same HTTPS gateway:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer <SECRET_V1 from your server .env>" \
+  https://203.0.113.50/metrics
+```
+
+Prometheus scrape example:
+
+```yaml
+scrape_configs:
+  - job_name: blockmachine-miners
+    metrics_path: /metrics
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials: <SECRET_V1 from your server .env>
+    static_configs:
+      - targets:
+          - 203.0.113.50
+```
+
+Metrics are operator telemetry for visibility and alerting. They are authenticated and useful for debugging sync, peer, disk, TLS, and version rollout issues, but they are not proof that a miner is honestly serving work.
+
+The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load, node data volume usage, TLS certificate expiry, the live deployed git SHA, and the native Subtensor Prometheus metrics from the node's internal `:9615` endpoint.
+
 ## Pricing
 
 You set a price in USD per Compute Unit (CU). A CU represents the normalized computational cost of serving a specific RPC method. Different methods cost different amounts of CU (a simple balance query costs less than a transaction trace).
@@ -270,14 +299,23 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 │  └──────────┘      └───────────────────┘     │
 │    │ :80 (health + ACME)    │ :30333 (p2p)   │
 │    │                        │                │
-│  ┌──────────┐               │                │
-│  │ certbot  │ (optional)    │                │
-│  └──────────┘               │                │
+│    │ /metrics               │                │
+│    ▼                        │                │
+│  ┌──────────┐      ┌────────┴─────────┐      │
+│  │ metrics  │─────▶│ node RPC + data  │      │
+│  │          │─────▶│ native :9615     │      │
+│  │          │─────▶│ host /proc       │      │
+│  └──────────┘      └──────────────────┘      │
+│                                              │
+│  ┌──────────┐                                │
+│  │ certbot  │ (optional)                     │
+│  └──────────┘                                │
 └──────────────────────────────────────────────┘
 ```
 
 - **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket connections to the subtensor node. Supports dual secrets for zero-downtime rotation.
 - **subtensor node** — Bittensor chain node running in lite (warp sync) or archive mode.
+- **metrics** — Exposes `/metrics` internally; nginx publishes it at `https://<endpoint>/metrics` with the same bearer auth as RPC.
 - **certbot** — Optional. Auto-renews Let's Encrypt certificates. Only used with domain-based setups.
 
 ## Secret rotation (zero downtime)
@@ -318,8 +356,11 @@ Environment variables in `.env`:
 | `SECRET_V2` | (empty) | Secondary token for zero-downtime rotation |
 | `DOMAIN` | (empty) | Domain for Let's Encrypt auto-renewal |
 | `BACKEND_PORT` | `9944` | Subtensor node RPC port |
+| `METRICS_PORT` | `9100` | Internal metrics exporter port |
 | `SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | TLS certificate path in container |
 | `SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | TLS key path in container |
+| `BM_MINER_GIT_SHA` | `unknown` | Deployed repository commit exposed in metrics |
+| `BM_MINER_GIT_BRANCH` | `unknown` | Deployed repository branch exposed in metrics |
 
 ## Day-to-day operations
 
@@ -331,6 +372,7 @@ bm miner ls                        # List all your nodes
 bm miner metrics [alias]           # Quality score, latency, success rate
 docker compose logs -f              # Container logs
 curl -sf http://localhost/health    # Gateway health check
+curl -fsS -H "Authorization: Bearer $SECRET_V1" https://<endpoint>/metrics
 ```
 
 ### Updating

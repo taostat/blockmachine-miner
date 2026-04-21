@@ -1,4 +1,10 @@
 services:
+  metrics:
+    environment:
+      NODE_MODE: archive
+      NODE_SYNC: full
+      NODE_DATABASE: rocksdb
+
   node:
     command:
       - --chain
@@ -18,3 +24,6 @@ services:
       - "10000"
       - --database
       - rocksdb
+      - --prometheus-external
+      - --prometheus-port
+      - "9615"
