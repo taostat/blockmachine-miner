@@ -641,6 +641,10 @@ main() {
       ufw allow 9000/tcp
       ufw allow 9000/udp
       ufw allow 9001/udp
+    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "archive" ]; then
+      # Caplin (erigon built-in CL) beacon P2P on port 4000.
+      ufw allow 4000/tcp
+      ufw allow 4000/udp
     fi
   fi
 
@@ -799,6 +803,8 @@ main() {
     [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
     [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ] && \
       extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
+    [ "$chain" = "eth" ] && [ "$eth_tier" = "archive" ] && \
+      extra_ports="${extra_ports} 4000/tcp 4000/udp"
 
     echo "Firewall:"
     echo "  Consider enabling a firewall if you haven't already:"

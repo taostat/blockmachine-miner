@@ -83,29 +83,41 @@ def add_eth_rpc_metrics(metrics):
         "gauge",
         bool_value(syncing),
     )
+
+    # Emit highest_block and sync_lag_blocks unconditionally so dashboards keep
+    # the series alive after the node catches up. When synced, eth_syncing
+    # returns `false` and we treat the tip as highest = current_block, lag = 0.
     if syncing:
         starting = parse_block_number(sync_state.get("startingBlock"))
-        current = parse_block_number(sync_state.get("currentBlock"))
         highest = parse_block_number(sync_state.get("highestBlock"))
+        sync_current = parse_block_number(sync_state.get("currentBlock"))
         metrics.add(
             "blockmachine_node_starting_block",
             "Starting block reported by eth_syncing.",
             "gauge",
             starting,
         )
-        metrics.add(
-            "blockmachine_node_highest_block",
-            "Highest known block reported by eth_syncing.",
-            "gauge",
-            highest,
+        sync_lag = (
+            max(highest - sync_current, 0)
+            if highest is not None and sync_current is not None
+            else None
         )
-        if current is not None and highest is not None:
-            metrics.add(
-                "blockmachine_node_sync_lag_blocks",
-                "Difference between highest known block and current block.",
-                "gauge",
-                max(highest - current, 0),
-            )
+    else:
+        highest = current_block
+        sync_lag = 0
+
+    metrics.add(
+        "blockmachine_node_highest_block",
+        "Highest known block (eth_syncing.highestBlock when syncing, else current_block).",
+        "gauge",
+        highest,
+    )
+    metrics.add(
+        "blockmachine_node_sync_lag_blocks",
+        "Difference between highest known block and current block (0 when synced).",
+        "gauge",
+        sync_lag,
+    )
 
     peer_hex, _ = safe_rpc("net_peerCount")
     peers = parse_block_number(peer_hex) or 0
