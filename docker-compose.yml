@@ -3,7 +3,7 @@ services:
     image: nginx:1.31.0-alpine
     volumes:
       - ./ssl:/etc/nginx/ssl:ro
-      - ./gateway/miner-gateway.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
+      - ./gateway/miner-gateway.tao.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
       - ./gateway/entrypoint.sh:/docker-entrypoint.d/90-blockmachine.sh:ro
       - certbot_webroot:/var/www/certbot:ro
     environment:
@@ -38,6 +38,7 @@ services:
       - node_data:/node-data:ro
       - /proc:/host/proc:ro
     environment:
+      CHAIN: tao
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
