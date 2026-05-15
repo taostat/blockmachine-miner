@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Blockmachine Miner Setup
-# Sets up the gateway + subtensor node on this server.
+# Sets up the gateway + a chain node (subtensor or ethereum) on this server.
 # No Python or CLI required — just Docker.
 
 REPO_URL="https://github.com/taostat/blockmachine-miner.git"
@@ -10,6 +10,8 @@ INSTALL_DIR="${BM_MINER_DIR:-/root/blockmachine-miner}"
 MIN_COMPOSE_MAJOR=2
 MIN_COMPOSE_MINOR=21
 MIN_RAM_MB=15000
+MIN_RAM_MB_ETH_LATEST=15000
+MIN_RAM_MB_ETH_ARCHIVE=30000
 
 # --- Helpers ---
 
@@ -66,11 +68,11 @@ check_system() {
   local arch
   arch=$(uname -m)
   if [ "$arch" != "x86_64" ]; then
-    error "x86_64 architecture required (found ${arch}). Subtensor does not support ARM."
+    error "x86_64 architecture required (found ${arch})."
   fi
 
   if [ "$ram_mb" -gt 0 ] && [ "$ram_mb" -lt "$MIN_RAM_MB" ]; then
-    error "At least ${MIN_RAM_MB}MB RAM required for warp sync (found ${ram_mb}MB). Use a larger server."
+    error "At least ${MIN_RAM_MB}MB RAM required (found ${ram_mb}MB). Use a larger server."
   fi
 
   local cores
@@ -81,6 +83,16 @@ check_system() {
 
   if [ "$ram_mb" -gt 0 ] && [ "$cores" -gt 0 ]; then
     info "System: ${cores} cores, ${ram_mb}MB RAM"
+  fi
+}
+
+# Warn (but don't error) when the chosen tier wants more RAM than the host has.
+check_tier_resources() {
+  local recommended_mb="$1" tier_label="$2"
+  local ram_mb
+  ram_mb=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo "0")
+  if [ "$ram_mb" -gt 0 ] && [ "$ram_mb" -lt "$recommended_mb" ]; then
+    warn "${tier_label} recommends ${recommended_mb}MB RAM; this host has ${ram_mb}MB. Sync may be slow or unstable."
   fi
 }
 
@@ -194,20 +206,39 @@ check_snapshot_disk_space() {
 }
 
 write_env() {
-  local env_file="$1" secret="$2" domain="${3:-}"
+  local env_file="$1" secret="$2" domain="${3:-}" chain_id="${4:-tao}" tier="${5:-}"
   local git_sha git_branch
   git_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
   git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+
   cat > "$env_file" <<EOF
 SECRET_V1=${secret}
 SECRET_V2=
 DOMAIN=${domain}
-BACKEND_PORT=9944
+CHAIN=${chain_id}
 SSL_CERT_PATH=/etc/nginx/ssl/cert.pem
 SSL_KEY_PATH=/etc/nginx/ssl/key.pem
 BM_MINER_GIT_SHA=${git_sha}
 BM_MINER_GIT_BRANCH=${git_branch}
 EOF
+
+  if [ "$chain_id" = "eth" ]; then
+    local el_client="reth"
+    [ "$tier" = "archive" ] && el_client="erigon"
+    # Erigon serves HTTP and WS on the same port; reth uses 8545/8546 split.
+    local ws_port=8546
+    [ "$tier" = "archive" ] && ws_port=8545
+    cat >> "$env_file" <<EOF
+ETH_TIER=${tier}
+ETH_NETWORK=mainnet
+EL_CLIENT=${el_client}
+BACKEND_HTTP_PORT=8545
+BACKEND_WS_PORT=${ws_port}
+EOF
+  else
+    echo "BACKEND_PORT=9944" >> "$env_file"
+  fi
+
   chmod 600 "$env_file"
 }
 
@@ -234,7 +265,15 @@ rpc_call() {
     https://localhost:443 2>/dev/null
 }
 
-wait_for_sync() {
+# Convert an "0x..." hex string from JSON-RPC to a decimal integer. Empty/0 on failure.
+hex_to_dec() {
+  local hex="$1"
+  hex="${hex#0x}"
+  [ -n "$hex" ] && [ "$hex" != "null" ] || { echo 0; return; }
+  printf '%d' "0x${hex}" 2>/dev/null || echo 0
+}
+
+wait_for_sync_tao() {
   info "Waiting for node to sync (lite nodes warp-sync in ~15 minutes)..."
   echo "    (Ctrl+C to skip — the node will continue syncing in the background)"
   echo ""
@@ -291,15 +330,81 @@ wait_for_sync() {
   done
 }
 
+# Ethereum sync waiter. Polls eth_blockNumber + eth_syncing + net_peerCount.
+# eth_syncing returns `false` when fully synced, else an object with progress.
+wait_for_sync_eth() {
+  info "Waiting for node to sync..."
+  echo "    Latest tier (reth --full) typically catches up to tip within hours via P2P;"
+  echo "    archive tier (erigon) syncs from torrents/peers and can take a day or more."
+  echo "    (Ctrl+C to skip — sync continues in the background)"
+  echo ""
+
+  while true; do
+    local block_result sync_result peer_result
+    block_result=$(rpc_call "eth_blockNumber") || { sleep 10; continue; }
+    sync_result=$(rpc_call "eth_syncing") || { sleep 10; continue; }
+    peer_result=$(rpc_call "net_peerCount") || { sleep 10; continue; }
+
+    local block_hex peer_hex
+    block_hex=$(echo "$block_result" | grep -o '"result":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
+    peer_hex=$(echo "$peer_result" | grep -o '"result":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
+
+    local current_block peers
+    current_block=$(hex_to_dec "${block_hex:-0x0}")
+    peers=$(hex_to_dec "${peer_hex:-0x0}")
+
+    # eth_syncing is `false` when fully synced, else { currentBlock, highestBlock, ... }
+    if echo "$sync_result" | grep -q '"result":false'; then
+      if [ "$current_block" -gt 0 ]; then
+        printf "\r    Block %s — synced! (%s peers)                                  \n" \
+          "$current_block" "$peers"
+        return 0
+      fi
+      printf "\r    Connecting to peers (%s connected)...                            " "$peers"
+      sleep 10
+      continue
+    fi
+
+    local highest_hex highest
+    highest_hex=$(echo "$sync_result" | grep -o '"highestBlock":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
+    highest=$(hex_to_dec "${highest_hex:-0x0}")
+
+    if [ "$highest" -gt 0 ] && [ "$current_block" -gt 0 ]; then
+      local pct=$(( current_block * 100 / highest ))
+      printf "\r    Syncing blocks %s / %s (%d%%) — %s peers            " \
+        "$current_block" "$highest" "$pct" "$peers"
+    else
+      printf "\r    Discovering peers (%s connected, target unknown)...               " "$peers"
+    fi
+
+    sleep 10
+  done
+}
+
+wait_for_sync() {
+  if [ "${chain:-tao}" = "eth" ]; then
+    wait_for_sync_eth
+  else
+    wait_for_sync_tao
+  fi
+}
+
 # shellcheck disable=SC2154
 print_registration() {
+  local tier_label
+  if [ "$chain" = "eth" ]; then
+    tier_label="$eth_tier"
+  else
+    tier_label="$([ "$archive" = true ] && echo "archive" || echo "lite")"
+  fi
+
   echo ""
   echo "========================================"
   echo " Registration Details"
   echo "========================================"
   echo ""
   echo "  Endpoint: ${endpoint}"
-  echo "  Chain:    tao ($([ "$archive" = true ] && echo "archive" || echo "lite"))"
+  echo "  Chain:    ${chain} (${tier_label})"
   echo "  Alias:    ${alias}"
   echo "  Secret:   ${secret}"
   if [ "$use_certbot" = true ]; then
@@ -331,10 +436,24 @@ main() {
 
   # ── Interactive: gather all user input ────────────────────────────
 
-  # Network
+  # Chain
+  echo ""
+  echo "Which blockchain will this miner serve?"
+  echo "  tao - Bittensor subtensor (default)"
+  echo "  eth - Ethereum mainnet (reth Latest tier or erigon Archive tier)"
+  chain=$(prompt_value "Chain" "tao")
+  chain=$(echo "$chain" | tr '[:upper:]' '[:lower:]')
+  case "$chain" in
+    tao|eth) ;;
+    *) error "Unknown chain '${chain}'. Choose 'tao' or 'eth'." ;;
+  esac
+
+  # Network — testnet only applies to tao for now; eth is mainnet-only.
   network="mainnet"
-  if prompt_yn "Use testnet?"; then
-    network="testnet"
+  if [ "$chain" = "tao" ]; then
+    if prompt_yn "Use testnet?"; then
+      network="testnet"
+    fi
   fi
 
   bm_prefix="bm"
@@ -342,9 +461,12 @@ main() {
     bm_prefix="bm --testnet"
   fi
 
-  # TLS / endpoint
+  # TLS / endpoint. Default URL scheme depends on chain — substrate uses WS for
+  # JSON-RPC (wss://), Ethereum uses HTTP with optional Upgrade (https://).
   use_certbot=false
   domain=""
+  local default_scheme="wss"
+  [ "$chain" = "eth" ] && default_scheme="https"
 
   if prompt_yn "Do you have a domain name?"; then
     domain=$(prompt_value "Enter your domain name" "")
@@ -355,37 +477,62 @@ main() {
       use_certbot=true
     fi
 
-    endpoint="wss://${domain}"
+    endpoint="${default_scheme}://${domain}"
   else
     public_ip=$(get_public_ip)
     info "Public IP: ${public_ip}"
     if is_ipv4 "$public_ip"; then
-      endpoint="wss://${public_ip}"
+      endpoint="${default_scheme}://${public_ip}"
     else
-      endpoint="wss://[${public_ip}]"
+      endpoint="${default_scheme}://[${public_ip}]"
     fi
     domain="$public_ip"
   fi
 
-  # Node type
-  echo ""
-  node_type=$(prompt_value "Node type: lite or archive?" "lite")
+  # Node tier (chain-specific terminology).
   archive=false
-  case "$node_type" in
-    [Aa]*) archive=true ;;
-  esac
-
-  if [ "$archive" = true ]; then
+  eth_tier="latest"
+  if [ "$chain" = "eth" ]; then
     echo ""
-    echo "  Archive node uses RocksDB. The chain data is currently ~3.2 TB and growing."
-    echo "  You will need at least 2x that (~6.5 TB) for snapshot extraction."
-    echo "  May take 6-12 hours to sync without a snapshot."
+    echo "Ethereum tier:"
+    echo "  latest  - reth --full preset (~240 GB disk, ~34h eth_getProof window)"
+    echo "  archive - erigon archive (~3.5 TB disk, full history back to genesis)"
+    eth_tier=$(prompt_value "Tier" "latest")
+    eth_tier=$(echo "$eth_tier" | tr '[:upper:]' '[:lower:]')
+    case "$eth_tier" in
+      latest)
+        check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
+        ;;
+      archive)
+        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive tier"
+        echo ""
+        echo "  Archive node uses erigon and requires ~3.5 TB of fast SSD/NVMe."
+        echo "  Initial sync from torrents/peers takes a day or more."
+        ;;
+      *)
+        error "Unknown tier '${eth_tier}'. Choose 'latest' or 'archive'."
+        ;;
+    esac
+  else
+    echo ""
+    node_type=$(prompt_value "Node type: lite or archive?" "lite")
+    case "$node_type" in
+      [Aa]*) archive=true ;;
+    esac
+
+    if [ "$archive" = true ]; then
+      echo ""
+      echo "  Archive node uses RocksDB. The chain data is currently ~3.2 TB and growing."
+      echo "  You will need at least 2x that (~6.5 TB) for snapshot extraction."
+      echo "  May take 6-12 hours to sync without a snapshot."
+    fi
   fi
 
-  # Snapshot (archive nodes only)
+  # Snapshot (tao archive nodes only — eth archive uses erigon's built-in
+  # torrent-based snapshot fetch, so no URL prompt is needed).
   snapshot_url=""
   snapshot_stream=false
-  if [ "$archive" = true ]; then
+  if [ "$chain" = "tao" ] && [ "$archive" = true ]; then
     echo ""
     echo "Speed up sync by restoring a snapshot."
     echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
@@ -408,9 +555,10 @@ main() {
     fi
   fi
 
-  # Alias
+  # Alias — default prefix reflects the chain so multi-chain operators can tell
+  # nodes apart at a glance in the dashboard.
   echo ""
-  default_alias="tao-$(echo "$domain" | tr '.' '-')"
+  default_alias="${chain}-$(echo "$domain" | tr '.' '-')"
   alias=$(prompt_value "Node alias (friendly name)" "$default_alias")
 
   # Secret
@@ -440,20 +588,36 @@ main() {
   fi
   check_compose_version
 
-  # Stop existing services if re-running (so port checks pass)
-  if [ -f "${INSTALL_DIR}/docker-compose.yml" ]; then
-    info "Stopping existing services for re-install..."
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" down 2>/dev/null || true
+  # Stop existing services if re-running (so port checks pass). Try every
+  # known compose file so switching chains during a re-install also works.
+  if [ -d "${INSTALL_DIR}" ]; then
+    info "Stopping any existing services for re-install..."
+    for f in docker-compose.yml docker-compose.eth.yml docker-compose.eth-archive.yml; do
+      if [ -f "${INSTALL_DIR}/${f}" ]; then
+        docker compose -f "${INSTALL_DIR}/${f}" down 2>/dev/null || true
+      fi
+    done
   fi
   check_port 80
   check_port 443
 
+  # P2P port differs per chain — substrate uses 30333, ethereum uses 30303.
+  p2p_port=30333
+  [ "$chain" = "eth" ] && p2p_port=30303
+
   # Open firewall ports if ufw is active
   if command -v ufw >/dev/null && ufw status | grep -q "active"; then
-    info "Opening firewall ports (80, 443, 30333)..."
+    info "Opening firewall ports (80, 443, ${p2p_port})..."
     ufw allow 80/tcp
     ufw allow 443/tcp
-    ufw allow 30333/tcp
+    ufw allow "${p2p_port}/tcp"
+    ufw allow "${p2p_port}/udp"
+    if [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ]; then
+      # Lighthouse beacon P2P (TCP+UDP on 9000, QUIC discovery UDP on 9001).
+      ufw allow 9000/tcp
+      ufw allow 9000/udp
+      ufw allow 9001/udp
+    fi
   fi
 
   # Clone or update the repo
@@ -478,8 +642,12 @@ main() {
     error "Certificates required for domain without Let's Encrypt. Re-run and choose Let's Encrypt, or provide certs."
   fi
 
-  # Write .env
-  write_env ".env" "$secret" "$domain"
+  # Write .env (chain-aware: emits ETH_TIER, EL_CLIENT, BACKEND_HTTP/WS_PORT for eth)
+  if [ "$chain" = "eth" ]; then
+    write_env ".env" "$secret" "$domain" "eth" "$eth_tier"
+  else
+    write_env ".env" "$secret" "$domain" "tao"
+  fi
   info ".env written"
 
   # Show registration details now (safe to Ctrl+C during sync)
@@ -541,12 +709,25 @@ main() {
     fi
   fi
 
-  # Start services
+  # Start services. Compose file selection:
+  #   tao + lite     → docker-compose.yml
+  #   tao + archive  → docker-compose.yml + docker-compose.archive.yml
+  #   eth + latest   → docker-compose.eth.yml
+  #   eth + archive  → docker-compose.eth-archive.yml
+  #   + tls (any)    → adds docker-compose.tls.yml
   echo ""
   info "Starting services..."
-  compose_cmd="docker compose -f docker-compose.yml"
-  if [ "$archive" = true ]; then
-    compose_cmd="$compose_cmd -f docker-compose.archive.yml"
+  if [ "$chain" = "eth" ]; then
+    if [ "$eth_tier" = "archive" ]; then
+      compose_cmd="docker compose -f docker-compose.eth-archive.yml"
+    else
+      compose_cmd="docker compose -f docker-compose.eth.yml"
+    fi
+  else
+    compose_cmd="docker compose -f docker-compose.yml"
+    if [ "$archive" = true ]; then
+      compose_cmd="$compose_cmd -f docker-compose.archive.yml"
+    fi
   fi
   if [ "$use_certbot" = true ]; then
     compose_cmd="$compose_cmd -f docker-compose.tls.yml"
@@ -592,7 +773,14 @@ main() {
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
     echo "Firewall:"
     echo "  Consider enabling a firewall if you haven't already:"
-    echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 30333/tcp && ufw enable"
+    if [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ]; then
+      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp \\"
+      echo "      && ufw allow 30303 && ufw allow 9000 && ufw allow 9001/udp && ufw enable"
+    elif [ "$chain" = "eth" ]; then
+      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 30303 && ufw enable"
+    else
+      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 30333/tcp && ufw enable"
+    fi
     echo ""
   fi
 }
