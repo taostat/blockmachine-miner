@@ -664,6 +664,17 @@ def collect_metrics():
         add_tao_mode_metrics(metrics)
         add_tao_rpc_metrics(metrics)
         native_text = add_tao_native_metrics(metrics)
+    elif CHAIN == "eth":
+        from eth_metrics import (
+            add_cl_metrics,
+            add_eth_mode_metrics,
+            add_eth_native_metrics,
+            add_eth_rpc_metrics,
+        )
+        add_eth_mode_metrics(metrics)
+        add_eth_rpc_metrics(metrics)
+        add_cl_metrics(metrics)
+        native_text = add_eth_native_metrics(metrics)
 
     add_gateway_metrics(metrics)
     add_disk_metrics(metrics)
@@ -678,7 +689,7 @@ def collect_metrics():
     )
     rendered = metrics.render()
     if native_text:
-        rendered += "\n# Native Subtensor metrics from node:9615\n"
+        rendered += f"\n# Native node metrics from {NATIVE_METRICS_URL}\n"
         rendered += native_text
         if not rendered.endswith("\n"):
             rendered += "\n"
