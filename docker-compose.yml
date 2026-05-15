@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: nginx:alpine
+    image: nginx:1.31.0-alpine
     volumes:
       - ./ssl:/etc/nginx/ssl:ro
       - ./gateway/miner-gateway.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
