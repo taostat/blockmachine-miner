@@ -790,8 +790,8 @@ main() {
   echo "========================================"
   echo ""
   echo "Manage this node:"
-  echo "  Logs:    docker compose logs -f"
-  echo "  Update:  cd ${INSTALL_DIR} && git pull && docker compose pull && docker compose up -d"
+  echo "  Logs:    ${compose_cmd} logs -f"
+  echo "  Update:  cd ${INSTALL_DIR} && git pull && ${compose_cmd} pull && ${compose_cmd} up -d"
   echo "  Health:  curl -sSf http://localhost/health"
   echo ""
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then

@@ -438,10 +438,24 @@ curl -fsS -H "Authorization: Bearer $SECRET_V1" https://<endpoint>/metrics
 
 ### Updating
 
-Pull the latest config and subtensor image, then restart:
+Pull the latest config and chain images, then restart. Use the same compose
+file the install script started — bare `docker compose` defaults to
+`docker-compose.yml` (the subtensor stack), which would replace an eth stack's
+containers with subtensor ones because service names collide.
 
 ```bash
+# Subtensor (lite or archive):
 cd /root/blockmachine-miner && git pull && docker compose pull && docker compose up -d
+
+# Ethereum latest:
+cd /root/blockmachine-miner && git pull \
+  && docker compose -f docker-compose.eth.yml pull \
+  && docker compose -f docker-compose.eth.yml up -d
+
+# Ethereum archive:
+cd /root/blockmachine-miner && git pull \
+  && docker compose -f docker-compose.eth-archive.yml pull \
+  && docker compose -f docker-compose.eth-archive.yml up -d
 ```
 
 Or re-run the install script — it updates the repo automatically:
@@ -453,7 +467,9 @@ bash <(curl -sSL https://blockmachine.io/miner/install.sh)
 ### Stopping
 
 ```bash
-docker compose down
+docker compose down                                  # subtensor
+docker compose -f docker-compose.eth.yml down        # eth latest
+docker compose -f docker-compose.eth-archive.yml down # eth archive
 ```
 
 Node data is persisted in a Docker volume (`node_data`). Restarting will resume from where it left off.

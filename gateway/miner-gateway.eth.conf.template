@@ -16,15 +16,19 @@ map $http_authorization $auth_ok {
 
 # Route by Upgrade header: WebSocket to ws port, everything else to http port.
 # Using a variable in proxy_pass forces nginx into runtime DNS resolution, which
-# is why the resolver directive below is required.
+# is why the resolver directive below is required. The regex is case-insensitive
+# (~*) because RFC 6455 makes the Upgrade header value case-insensitive.
 map $http_upgrade $rpc_backend {
-    default     "http://${BACKEND_HOST}:${BACKEND_HTTP_PORT}";
-    websocket   "http://${BACKEND_HOST}:${BACKEND_WS_PORT}";
+    default          "http://${BACKEND_HOST}:${BACKEND_HTTP_PORT}";
+    "~*^websocket$"  "http://${BACKEND_HOST}:${BACKEND_WS_PORT}";
 }
 
+# For plain HTTP RPC ($http_upgrade is empty) leave the Connection header
+# unset so nginx doesn't actively force the upstream to close — sending
+# "close" defeats any backend keep-alive and adds TCP churn under load.
 map $http_upgrade $connection_upgrade {
     default upgrade;
-    ''      close;
+    ''      '';
 }
 
 upstream metrics_backend {
