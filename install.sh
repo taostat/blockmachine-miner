@@ -766,7 +766,7 @@ main() {
     fi
   else
     warn "Gateway not yet healthy. The chain node may still be syncing."
-    echo "    Check status: docker compose logs -f"
+    echo "    Check status: ${compose_cmd} logs -f"
     if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
       warn "Keeping snapshot file until node is confirmed healthy."
       echo "    Remove manually once healthy: rm $snapshot_file"
@@ -776,7 +776,7 @@ main() {
   if [ "$use_certbot" = true ]; then
     echo ""
     info "Certbot is obtaining your Let's Encrypt certificate..."
-    echo "    Check progress: docker compose -f docker-compose.yml -f docker-compose.tls.yml logs certbot"
+    echo "    Check progress: ${compose_cmd} logs certbot"
     echo "    Certificates auto-renew every 12 hours."
   fi
 
