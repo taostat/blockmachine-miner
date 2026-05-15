@@ -418,10 +418,10 @@ Chain-specific:
 |----------|---------|---------|-------------|
 | `BACKEND_PORT` | `9944` | tao | Subtensor node RPC port |
 | `ETH_TIER` | (empty) | eth | `latest` or `archive` |
-| `ETH_NETWORK` | `mainnet` | eth | Ethereum network (mainnet only) |
 | `EL_CLIENT` | (empty) | eth | `reth` (latest) or `erigon` (archive) |
 | `BACKEND_HTTP_PORT` | `8545` | eth | EL HTTP JSON-RPC port |
 | `BACKEND_WS_PORT` | `8546` (reth) / `8545` (erigon) | eth | EL WebSocket port |
+| `CHECKPOINT_SYNC_URL` | `https://mainnet.checkpoint.sigp.io` | eth latest | Lighthouse beacon checkpoint source |
 
 ## Day-to-day operations
 

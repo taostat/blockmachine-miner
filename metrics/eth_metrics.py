@@ -7,39 +7,30 @@ names mirror the tao set (blockmachine_node_*) so dashboards work across chains.
 
 import json
 import os
-import time
-import urllib.error
 
 from exporter import (
     bool_value,
-    fetch_text,
+    parse_block_number,
     parse_prometheus_sample,
     safe_fetch_text,
     safe_rpc,
 )
 
-
-def parse_hex_int(value):
-    if value is None:
-        return None
-    try:
-        if isinstance(value, int):
-            return value
-        return int(str(value), 16)
-    except (TypeError, ValueError):
-        return None
+# Static identity values cached after the first successful probe — both change
+# only when the EL restarts, so we skip them on every scrape after that.
+_cached_chain_id = None
+_cached_client_version = None
 
 
 def add_eth_mode_metrics(metrics):
     tier = os.getenv("ETH_TIER", "latest")
-    network = os.getenv("ETH_NETWORK", "mainnet")
     el_client = os.getenv("EL_CLIENT", "reth")
     metrics.add(
         "blockmachine_node_mode_info",
         "Configured Ethereum node mode.",
         "gauge",
         1,
-        {"chain": "eth", "tier": tier, "network": network, "el_client": el_client},
+        {"chain": "eth", "tier": tier, "el_client": el_client},
     )
     metrics.add(
         "blockmachine_node_archive_mode",
@@ -50,6 +41,8 @@ def add_eth_mode_metrics(metrics):
 
 
 def add_eth_rpc_metrics(metrics):
+    global _cached_chain_id, _cached_client_version
+
     block_hex, latency = safe_rpc("eth_blockNumber")
     rpc_up = block_hex is not None
     metrics.add(
@@ -67,7 +60,7 @@ def add_eth_rpc_metrics(metrics):
     if not rpc_up:
         return
 
-    current_block = parse_hex_int(block_hex)
+    current_block = parse_block_number(block_hex)
     if current_block is not None:
         metrics.add(
             "blockmachine_node_current_block",
@@ -91,9 +84,9 @@ def add_eth_rpc_metrics(metrics):
         bool_value(syncing),
     )
     if syncing:
-        starting = parse_hex_int(sync_state.get("startingBlock"))
-        current = parse_hex_int(sync_state.get("currentBlock"))
-        highest = parse_hex_int(sync_state.get("highestBlock"))
+        starting = parse_block_number(sync_state.get("startingBlock"))
+        current = parse_block_number(sync_state.get("currentBlock"))
+        highest = parse_block_number(sync_state.get("highestBlock"))
         metrics.add(
             "blockmachine_node_starting_block",
             "Starting block reported by eth_syncing.",
@@ -115,13 +108,15 @@ def add_eth_rpc_metrics(metrics):
             )
 
     peer_hex, _ = safe_rpc("net_peerCount")
-    peers = parse_hex_int(peer_hex) or 0
+    peers = parse_block_number(peer_hex) or 0
     metrics.add("blockmachine_node_peers", "Connected EL peer count.", "gauge", peers)
 
-    chain_id = parse_hex_int(safe_rpc("eth_chainId")[0])
-    el_client = os.getenv("EL_CLIENT", "reth")
-    client_version_result, _ = safe_rpc("web3_clientVersion")
-    client_version = client_version_result if isinstance(client_version_result, str) else "unknown"
+    if _cached_chain_id is None:
+        _cached_chain_id = parse_block_number(safe_rpc("eth_chainId")[0])
+    if _cached_client_version is None:
+        version_result, _ = safe_rpc("web3_clientVersion")
+        if isinstance(version_result, str):
+            _cached_client_version = version_result
 
     metrics.add(
         "blockmachine_node_info",
@@ -130,9 +125,9 @@ def add_eth_rpc_metrics(metrics):
         1,
         {
             "chain": "eth",
-            "el_client": el_client,
-            "chain_id": str(chain_id) if chain_id is not None else "unknown",
-            "node_version": client_version,
+            "el_client": os.getenv("EL_CLIENT", "reth"),
+            "chain_id": str(_cached_chain_id) if _cached_chain_id is not None else "unknown",
+            "node_version": _cached_client_version or "unknown",
         },
     )
 
@@ -152,14 +147,7 @@ def add_cl_metrics(metrics):
         return
     endpoint = f"{cl_url}/eth/v1/node/syncing"
 
-    started = time.monotonic()
-    text = None
-    try:
-        text, _ = fetch_text(endpoint)
-    except (OSError, urllib.error.URLError, ValueError):
-        text = None
-    latency = time.monotonic() - started
-
+    text, latency = safe_fetch_text(endpoint)
     cl_up = text is not None
     metrics.add(
         "blockmachine_cl_up",
@@ -199,11 +187,8 @@ def add_cl_metrics(metrics):
         pass
 
 
-# Common process_* samples exposed by every Prometheus client (both reth and
-# erigon expose this set). Chain-specific metrics layered on top differ between
-# clients; we map only the shared ones here. Reth serves Prometheus on port
-# 9101 (overridden from the default 9001 to free that port for Lighthouse's
-# QUIC discovery); erigon serves on 6060.
+# Reth uses port 9101 not the default 9001, which would clash with Lighthouse's
+# QUIC discovery port. Erigon serves on 6060.
 _EL_PROCESS_SAMPLES = {
     "process_cpu_seconds_total": (
         "blockmachine_node_process_cpu_seconds_total",

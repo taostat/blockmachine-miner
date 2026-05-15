@@ -96,6 +96,21 @@ check_tier_resources() {
   fi
 }
 
+# Warn if disk free at INSTALL_DIR is below the rough required size for a tier.
+# Catches obvious provisioning errors before a multi-day sync starts on a too-small disk.
+check_tier_disk() {
+  local required_gb="$1" tier_label="$2"
+  local check_dir="${INSTALL_DIR}"
+  [ -d "$check_dir" ] || check_dir="$(dirname "$check_dir")"
+  local available_kb
+  available_kb=$(df -k "$check_dir" 2>/dev/null | tail -1 | awk '{print $4}')
+  [ -n "$available_kb" ] || return 0
+  local available_gb=$(( available_kb / 1024 / 1024 ))
+  if [ "$available_gb" -lt "$required_gb" ]; then
+    warn "${tier_label} expects ~${required_gb} GB free at ${check_dir}; only ${available_gb} GB available. Sync will fail or stall."
+  fi
+}
+
 check_compose_version() {
   local version
   version=$(docker compose version --short 2>/dev/null || docker compose version 2>/dev/null || echo "")
@@ -230,7 +245,6 @@ EOF
     [ "$tier" = "archive" ] && ws_port=8545
     cat >> "$env_file" <<EOF
 ETH_TIER=${tier}
-ETH_NETWORK=mainnet
 EL_CLIENT=${el_client}
 BACKEND_HTTP_PORT=8545
 BACKEND_WS_PORT=${ws_port}
@@ -332,6 +346,12 @@ wait_for_sync_tao() {
 
 # Ethereum sync waiter. Polls eth_blockNumber + eth_syncing + net_peerCount.
 # eth_syncing returns `false` when fully synced, else an object with progress.
+# Extract the hex value of a named JSON-RPC result field.
+# Examples: extract_hex_field "$json" result, extract_hex_field "$json" highestBlock
+extract_hex_field() {
+  echo "$1" | grep -o "\"$2\":\"0x[0-9a-fA-F]*\"" | grep -o '0x[0-9a-fA-F]*' | head -1
+}
+
 wait_for_sync_eth() {
   info "Waiting for node to sync..."
   echo "    Latest tier (reth --full) typically catches up to tip within hours via P2P;"
@@ -340,21 +360,21 @@ wait_for_sync_eth() {
   echo ""
 
   while true; do
-    local block_result sync_result peer_result
-    block_result=$(rpc_call "eth_blockNumber") || { sleep 10; continue; }
+    local sync_result peer_result
     sync_result=$(rpc_call "eth_syncing") || { sleep 10; continue; }
     peer_result=$(rpc_call "net_peerCount") || { sleep 10; continue; }
 
-    local block_hex peer_hex
-    block_hex=$(echo "$block_result" | grep -o '"result":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
-    peer_hex=$(echo "$peer_result" | grep -o '"result":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
-
-    local current_block peers
-    current_block=$(hex_to_dec "${block_hex:-0x0}")
+    local peer_hex peers
+    peer_hex=$(extract_hex_field "$peer_result" result)
     peers=$(hex_to_dec "${peer_hex:-0x0}")
 
-    # eth_syncing is `false` when fully synced, else { currentBlock, highestBlock, ... }
+    # eth_syncing returns `false` when fully synced (need eth_blockNumber to
+    # display the tip), else an object with currentBlock/highestBlock.
     if echo "$sync_result" | grep -q '"result":false'; then
+      local block_result block_hex current_block
+      block_result=$(rpc_call "eth_blockNumber") || { sleep 10; continue; }
+      block_hex=$(extract_hex_field "$block_result" result)
+      current_block=$(hex_to_dec "${block_hex:-0x0}")
       if [ "$current_block" -gt 0 ]; then
         printf "\r    Block %s — synced! (%s peers)                                  \n" \
           "$current_block" "$peers"
@@ -365,8 +385,10 @@ wait_for_sync_eth() {
       continue
     fi
 
-    local highest_hex highest
-    highest_hex=$(echo "$sync_result" | grep -o '"highestBlock":"0x[0-9a-fA-F]*"' | grep -o '0x[0-9a-fA-F]*' | head -1)
+    local current_hex highest_hex current_block highest
+    current_hex=$(extract_hex_field "$sync_result" currentBlock)
+    highest_hex=$(extract_hex_field "$sync_result" highestBlock)
+    current_block=$(hex_to_dec "${current_hex:-0x0}")
     highest=$(hex_to_dec "${highest_hex:-0x0}")
 
     if [ "$highest" -gt 0 ] && [ "$current_block" -gt 0 ]; then
@@ -442,7 +464,7 @@ main() {
   echo "  tao - Bittensor subtensor (default)"
   echo "  eth - Ethereum mainnet (reth Latest tier or erigon Archive tier)"
   chain=$(prompt_value "Chain" "tao")
-  chain=$(echo "$chain" | tr '[:upper:]' '[:lower:]')
+  chain="${chain,,}"
   case "$chain" in
     tao|eth) ;;
     *) error "Unknown chain '${chain}'. Choose 'tao' or 'eth'." ;;
@@ -498,13 +520,15 @@ main() {
     echo "  latest  - reth --full preset (~240 GB disk, ~34h eth_getProof window)"
     echo "  archive - erigon archive (~3.5 TB disk, full history back to genesis)"
     eth_tier=$(prompt_value "Tier" "latest")
-    eth_tier=$(echo "$eth_tier" | tr '[:upper:]' '[:lower:]')
+    eth_tier="${eth_tier,,}"
     case "$eth_tier" in
       latest)
         check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
+        check_tier_disk 250 "ETH Latest tier"
         ;;
       archive)
         check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive tier"
+        check_tier_disk 4000 "ETH Archive tier"
         echo ""
         echo "  Archive node uses erigon and requires ~3.5 TB of fast SSD/NVMe."
         echo "  Initial sync from torrents/peers takes a day or more."
@@ -741,7 +765,7 @@ main() {
       info "Snapshot file removed"
     fi
   else
-    warn "Gateway not yet healthy. The subtensor node may still be syncing."
+    warn "Gateway not yet healthy. The chain node may still be syncing."
     echo "    Check status: docker compose logs -f"
     if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
       warn "Keeping snapshot file until node is confirmed healthy."
@@ -771,16 +795,18 @@ main() {
   echo "  Health:  curl -sSf http://localhost/health"
   echo ""
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
+    local extra_ports="${p2p_port}/tcp"
+    [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
+    [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ] && \
+      extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
+
     echo "Firewall:"
     echo "  Consider enabling a firewall if you haven't already:"
-    if [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ]; then
-      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp \\"
-      echo "      && ufw allow 30303 && ufw allow 9000 && ufw allow 9001/udp && ufw enable"
-    elif [ "$chain" = "eth" ]; then
-      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 30303 && ufw enable"
-    else
-      echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 30333/tcp && ufw enable"
-    fi
+    local rules="ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp"
+    for port in $extra_ports; do
+      rules="${rules} && ufw allow ${port}"
+    done
+    echo "    ${rules} && ufw enable"
     echo ""
   fi
 }

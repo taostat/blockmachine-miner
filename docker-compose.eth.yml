@@ -29,15 +29,15 @@ services:
       timeout: 10s
       retries: 3
 
+  # Generates the Engine API JWT once on first run. Reuses the reth image so
+  # there is no separate alpine pull and no apk install on cold start.
   jwt-init:
-    image: alpine:3.20
+    image: ghcr.io/paradigmxyz/reth:v2.2.0
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - sh
-      - -c
       - |
         if [ ! -s /jwt/jwt.hex ]; then
-          apk add --no-cache openssl >/dev/null
-          openssl rand -hex 32 | tr -d '\n' > /jwt/jwt.hex
+          head -c 32 /dev/urandom | xxd -p -c 32 > /jwt/jwt.hex
           chmod 0644 /jwt/jwt.hex
           echo "Generated Engine API JWT secret"
         else
@@ -96,7 +96,7 @@ services:
       - --http-port=5052
       - --execution-endpoint=http://node:8551
       - --execution-jwt=/jwt/jwt.hex
-      - --checkpoint-sync-url=https://mainnet.checkpoint.sigp.io
+      - --checkpoint-sync-url=${CHECKPOINT_SYNC_URL:-https://mainnet.checkpoint.sigp.io}
       - --disable-deposit-contract-sync
       - --port=9000
       - --discovery-port=9000
@@ -123,7 +123,6 @@ services:
       CHAIN: eth
       EL_CLIENT: reth
       ETH_TIER: latest
-      ETH_NETWORK: mainnet
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}

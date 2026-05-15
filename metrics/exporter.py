@@ -675,6 +675,8 @@ def collect_metrics():
         add_eth_rpc_metrics(metrics)
         add_cl_metrics(metrics)
         native_text = add_eth_native_metrics(metrics)
+    else:
+        raise ValueError(f"Unknown CHAIN={CHAIN!r}; expected 'tao' or 'eth'")
 
     add_gateway_metrics(metrics)
     add_disk_metrics(metrics)
