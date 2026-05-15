@@ -146,7 +146,10 @@ def add_eth_rpc_metrics(metrics):
 
 
 def add_cl_metrics(metrics):
-    cl_url = os.getenv("CL_RPC_URL", "http://consensus:5052")
+    cl_url = os.getenv("CL_RPC_URL", "")
+    if not cl_url:
+        # Archive tier uses erigon's built-in Caplin CL; no separate beacon endpoint to probe.
+        return
     endpoint = f"{cl_url}/eth/v1/node/syncing"
 
     started = time.monotonic()
@@ -196,11 +199,12 @@ def add_cl_metrics(metrics):
         pass
 
 
-# Native EL Prometheus samples we map onto blockmachine_node_process_* metrics.
-# Reth exposes the standard process_* set on port 9101 (we override default 9001
-# to free that port for Lighthouse's QUIC discovery). Erigon's namespace differs
-# and is handled in commit 3 via EL_CLIENT dispatch below.
-_RETH_PROCESS_SAMPLES = {
+# Common process_* samples exposed by every Prometheus client (both reth and
+# erigon expose this set). Chain-specific metrics layered on top differ between
+# clients; we map only the shared ones here. Reth serves Prometheus on port
+# 9101 (overridden from the default 9001 to free that port for Lighthouse's
+# QUIC discovery); erigon serves on 6060.
+_EL_PROCESS_SAMPLES = {
     "process_cpu_seconds_total": (
         "blockmachine_node_process_cpu_seconds_total",
         "Total CPU time consumed by the EL process.",
@@ -249,7 +253,7 @@ def add_eth_native_metrics(metrics):
     if not native_up:
         return None
 
-    for source, (target, help_text, mt) in _RETH_PROCESS_SAMPLES.items():
+    for source, (target, help_text, mt) in _EL_PROCESS_SAMPLES.items():
         metrics.add(target, help_text, mt, parse_prometheus_sample(text, source))
 
     return text
