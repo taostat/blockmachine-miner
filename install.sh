@@ -56,9 +56,12 @@ clone_or_update_repo() {
 }
 
 check_port() {
-  if ss -tlnp 2>/dev/null | grep -q ":$1 " ||
-     netstat -tlnp 2>/dev/null | grep -q ":$1 "; then
-    error "Port $1 is already in use. Stop the process and try again."
+  local port="$1" proto="${2:-tcp}"
+  local flags="-tlnp"
+  [ "$proto" = "udp" ] && flags="-ulnp"
+  if ss "$flags" 2>/dev/null | grep -q ":${port} " ||
+     netstat "$flags" 2>/dev/null | grep -q ":${port} "; then
+    error "${proto^^} port ${port} is already in use. Stop the process and try again."
   fi
 }
 
@@ -614,11 +617,13 @@ main() {
 
   # Stop existing services if re-running (so port checks pass). Try every
   # known compose file so switching chains during a re-install also works.
+  # --remove-orphans sweeps the certbot service if the previous install used
+  # docker-compose.tls.yml but this one doesn't.
   if [ -d "${INSTALL_DIR}" ]; then
     info "Stopping any existing services for re-install..."
     for f in docker-compose.yml docker-compose.eth.yml docker-compose.eth-archive.yml; do
       if [ -f "${INSTALL_DIR}/${f}" ]; then
-        docker compose -f "${INSTALL_DIR}/${f}" down 2>/dev/null || true
+        docker compose -f "${INSTALL_DIR}/${f}" down --remove-orphans 2>/dev/null || true
       fi
     done
   fi
@@ -628,6 +633,21 @@ main() {
   # P2P port differs per chain — substrate uses 30333, ethereum uses 30303.
   p2p_port=30333
   [ "$chain" = "eth" ] && p2p_port=30303
+
+  # Preflight chain-specific ports so docker fails fast and visibly, not with
+  # a cryptic late "address already in use" inside compose up.
+  check_port "$p2p_port" tcp
+  if [ "$chain" = "eth" ]; then
+    check_port "$p2p_port" udp
+    if [ "$eth_tier" = "latest" ]; then
+      check_port 9000 tcp
+      check_port 9000 udp
+      check_port 9001 udp
+    elif [ "$eth_tier" = "archive" ]; then
+      check_port 4000 tcp
+      check_port 4000 udp
+    fi
+  fi
 
   # Open firewall ports if ufw is active
   if command -v ufw >/dev/null && ufw status | grep -q "active"; then
