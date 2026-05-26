@@ -241,11 +241,13 @@ BM_MINER_GIT_BRANCH=${git_branch}
 EOF
 
   if [ "$chain_id" = "eth" ]; then
-    local el_client="reth"
-    [ "$tier" = "archive" ] && el_client="erigon"
     # Erigon serves HTTP and WS on the same port; reth uses 8545/8546 split.
+    local el_client="reth"
     local ws_port=8546
-    [ "$tier" = "archive" ] && ws_port=8545
+    if [ "$tier" = "archive-erigon" ]; then
+      el_client="erigon"
+      ws_port=8545
+    fi
     cat >> "$env_file" <<EOF
 ETH_TIER=${tier}
 EL_CLIENT=${el_client}
@@ -357,8 +359,9 @@ extract_hex_field() {
 
 wait_for_sync_eth() {
   info "Waiting for node to sync..."
-  echo "    Latest tier (reth --full) typically catches up to tip within hours via P2P;"
-  echo "    archive tier (erigon) syncs from torrents/peers and can take a day or more."
+  echo "    Latest tier (reth --full):   hours via P2P."
+  echo "    Archive Reth (reth default): ~24-48h from a snapshot."
+  echo "    Archive Erigon (erigon):     a day or more (built-in torrent fetch)."
   echo "    (Ctrl+C to skip — sync continues in the background)"
   echo ""
 
@@ -465,7 +468,7 @@ main() {
   echo ""
   echo "Which blockchain will this miner serve?"
   echo "  tao - Bittensor subtensor (default)"
-  echo "  eth - Ethereum mainnet (reth Latest tier or erigon Archive tier)"
+  echo "  eth - Ethereum mainnet (reth Latest, reth Archive, or erigon Archive)"
   chain=$(prompt_value "Chain" "tao")
   chain="${chain,,}"
   case "$chain" in
@@ -520,26 +523,46 @@ main() {
   if [ "$chain" = "eth" ]; then
     echo ""
     echo "Ethereum tier:"
-    echo "  latest  - reth --full preset (~240 GB disk, ~34h eth_getProof window)"
-    echo "  archive - erigon archive (~3.5 TB disk, full history back to genesis)"
+    echo "  latest         - reth --full,   ~250 GB,  recent state + recent history"
+    echo "  archive-reth   - reth default,  ~3 TB,    full history + tip-state proofs"
+    echo "  archive-erigon - erigon,        ~6 TB,    deep getProof only (per network policy)"
     eth_tier=$(prompt_value "Tier" "latest")
     eth_tier="${eth_tier,,}"
+    # Backward compat: the old value "archive" meant erigon. Accept it as a
+    # synonym for archive-erigon and warn so operators update their scripts.
+    if [ "$eth_tier" = "archive" ]; then
+      warn "tier 'archive' is being renamed; use 'archive-erigon' going forward."
+      eth_tier="archive-erigon"
+    fi
     case "$eth_tier" in
       latest)
         check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
         check_tier_disk 250 "ETH Latest tier"
         ;;
-      archive)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive tier"
-        check_tier_disk 4000 "ETH Archive tier"
+      archive-reth)
+        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Reth tier"
+        check_tier_disk 3000 "ETH Archive Reth tier"
         echo ""
-        echo "  Archive node uses erigon and requires ~3.5 TB of fast SSD/NVMe."
+        echo "  Archive Reth uses reth in default (non-pruned) mode and requires"
+        echo "  ~3 TB of fast SSD/NVMe. Sync from a snapshot typically takes 24-48h."
+        echo "  Serves full historical bodies/receipts/logs plus tip-state proofs;"
+        echo "  deeper proofs route to Archive Erigon backends on the network."
+        ;;
+      archive-erigon)
+        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Erigon tier"
+        check_tier_disk 6000 "ETH Archive Erigon tier"
+        echo ""
+        echo "  Archive Erigon uses erigon and requires ~6 TB of fast SSD/NVMe."
         echo "  Initial sync from torrents/peers takes a day or more."
+        echo "  Network policy currently routes Erigon backends to eth_getProof*"
+        echo "  only; all other ETH traffic is served by Reth backends. Erigon"
+        echo "  operators receive a narrow slice of high-value queries today."
         ;;
       *)
-        error "Unknown tier '${eth_tier}'. Choose 'latest' or 'archive'."
+        error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
         ;;
     esac
+    info "Using compose file for tier '${eth_tier}'."
   else
     echo ""
     node_type=$(prompt_value "Node type: lite or archive?" "lite")
@@ -621,7 +644,10 @@ main() {
   # docker-compose.tls.yml but this one doesn't.
   if [ -d "${INSTALL_DIR}" ]; then
     info "Stopping any existing services for re-install..."
-    for f in docker-compose.yml docker-compose.eth.yml docker-compose.eth-archive.yml; do
+    for f in docker-compose.yml \
+             docker-compose.eth.yml \
+             docker-compose.eth-archive-reth.yml \
+             docker-compose.eth-archive.yml; do
       if [ -f "${INSTALL_DIR}/${f}" ]; then
         docker compose -f "${INSTALL_DIR}/${f}" down --remove-orphans 2>/dev/null || true
       fi
@@ -639,14 +665,18 @@ main() {
   check_port "$p2p_port" tcp
   if [ "$chain" = "eth" ]; then
     check_port "$p2p_port" udp
-    if [ "$eth_tier" = "latest" ]; then
-      check_port 9000 tcp
-      check_port 9000 udp
-      check_port 9001 udp
-    elif [ "$eth_tier" = "archive" ]; then
-      check_port 4000 tcp
-      check_port 4000 udp
-    fi
+    case "$eth_tier" in
+      latest|archive-reth)
+        # Both reth tiers run an external Lighthouse beacon node alongside.
+        check_port 9000 tcp
+        check_port 9000 udp
+        check_port 9001 udp
+        ;;
+      archive-erigon)
+        check_port 4000 tcp
+        check_port 4000 udp
+        ;;
+    esac
   fi
 
   # Open firewall ports if ufw is active
@@ -656,12 +686,12 @@ main() {
     ufw allow 443/tcp
     ufw allow "${p2p_port}/tcp"
     ufw allow "${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ]; then
+    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
       # Lighthouse beacon P2P (TCP+UDP on 9000, QUIC discovery UDP on 9001).
       ufw allow 9000/tcp
       ufw allow 9000/udp
       ufw allow 9001/udp
-    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "archive" ]; then
+    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ]; then
       # Caplin (erigon built-in CL) beacon P2P on port 4000.
       ufw allow 4000/tcp
       ufw allow 4000/udp
@@ -758,19 +788,20 @@ main() {
   fi
 
   # Start services. Compose file selection:
-  #   tao + lite     → docker-compose.yml
-  #   tao + archive  → docker-compose.yml + docker-compose.archive.yml
-  #   eth + latest   → docker-compose.eth.yml
-  #   eth + archive  → docker-compose.eth-archive.yml
-  #   + tls (any)    → adds docker-compose.tls.yml
+  #   tao + lite            → docker-compose.yml
+  #   tao + archive         → docker-compose.yml + docker-compose.archive.yml
+  #   eth + latest          → docker-compose.eth.yml
+  #   eth + archive-reth    → docker-compose.eth-archive-reth.yml
+  #   eth + archive-erigon  → docker-compose.eth-archive.yml
+  #   + tls (any)           → adds docker-compose.tls.yml
   echo ""
   info "Starting services..."
   if [ "$chain" = "eth" ]; then
-    if [ "$eth_tier" = "archive" ]; then
-      compose_cmd="docker compose -f docker-compose.eth-archive.yml"
-    else
-      compose_cmd="docker compose -f docker-compose.eth.yml"
-    fi
+    case "$eth_tier" in
+      archive-reth)   compose_cmd="docker compose -f docker-compose.eth-archive-reth.yml" ;;
+      archive-erigon) compose_cmd="docker compose -f docker-compose.eth-archive.yml" ;;
+      *)              compose_cmd="docker compose -f docker-compose.eth.yml" ;;
+    esac
   else
     compose_cmd="docker compose -f docker-compose.yml"
     if [ "$archive" = true ]; then
@@ -821,9 +852,10 @@ main() {
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
     local extra_ports="${p2p_port}/tcp"
     [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
-    [ "$chain" = "eth" ] && [ "$eth_tier" = "latest" ] && \
+    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
       extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
-    [ "$chain" = "eth" ] && [ "$eth_tier" = "archive" ] && \
+    fi
+    [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ] && \
       extra_ports="${extra_ports} 4000/tcp 4000/udp"
 
     echo "Firewall:"
