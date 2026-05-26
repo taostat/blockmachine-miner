@@ -1,8 +1,9 @@
 """Ethereum chain metrics — JSON-RPC probes, beacon API probes, and native scrape.
 
-Shared between Latest tier (reth) and Archive tier (erigon). The EL client is
-identified via the EL_CLIENT env var (reth | erigon). Customer-facing metric
-names mirror the tao set (blockmachine_node_*) so dashboards work across chains.
+Shared across all three ETH tiers (latest / archive-reth / archive-erigon).
+The EL client is identified via the EL_CLIENT env var (reth | erigon).
+Customer-facing metric names mirror the tao set (blockmachine_node_*) so
+dashboards work across chains.
 """
 
 import json
@@ -36,7 +37,7 @@ def add_eth_mode_metrics(metrics):
         "blockmachine_node_archive_mode",
         "Whether the node is configured as a full archive.",
         "gauge",
-        1 if tier == "archive" else 0,
+        1 if tier.startswith("archive") else 0,
     )
 
 
@@ -155,7 +156,7 @@ def add_eth_rpc_metrics(metrics):
 def add_cl_metrics(metrics):
     cl_url = os.getenv("CL_RPC_URL", "")
     if not cl_url:
-        # Archive tier uses erigon's built-in Caplin CL; no separate beacon endpoint to probe.
+        # Archive Erigon uses erigon's built-in Caplin CL; no separate beacon endpoint to probe.
         return
     endpoint = f"{cl_url}/eth/v1/node/syncing"
 
