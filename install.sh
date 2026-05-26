@@ -528,12 +528,6 @@ main() {
     echo "  archive-erigon - erigon,        ~6 TB,    deep getProof only (per network policy)"
     eth_tier=$(prompt_value "Tier" "latest")
     eth_tier="${eth_tier,,}"
-    # Backward compat: the old value "archive" meant erigon. Accept it as a
-    # synonym for archive-erigon and warn so operators update their scripts.
-    if [ "$eth_tier" = "archive" ]; then
-      warn "tier 'archive' is being renamed; use 'archive-erigon' going forward."
-      eth_tier="archive-erigon"
-    fi
     case "$eth_tier" in
       latest)
         check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
@@ -562,7 +556,6 @@ main() {
         error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
         ;;
     esac
-    info "Using compose file for tier '${eth_tier}'."
   else
     echo ""
     node_type=$(prompt_value "Node type: lite or archive?" "lite")
