@@ -548,9 +548,12 @@ main() {
         echo ""
         echo "  Archive Erigon uses erigon and requires ~6 TB of fast SSD/NVMe."
         echo "  Initial sync from torrents/peers takes a day or more."
-        echo "  Network policy currently routes Erigon backends to eth_getProof*"
-        echo "  only; all other ETH traffic is served by Reth backends. Erigon"
-        echo "  operators receive a narrow slice of high-value queries today."
+        echo ""
+        echo "  Note: Erigon support is included, but Blockmachine's current network"
+        echo "  policy routes only eth_getProof* traffic to Erigon backends. This"
+        echo "  is a small share of customer volume today. If you're choosing a"
+        echo "  client for general ETH RPC mining, Reth is currently recommended."
+        echo "  You can continue with Erigon — proceeding now."
         ;;
       *)
         error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
