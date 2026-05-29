@@ -63,6 +63,15 @@ Customer → Gateway → Your Node
 
 Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Archive tiers benefit substantially from NVMe storage. The install script handles all dependencies (Docker, git, certificates).
 
+## Choosing your Ethereum client
+
+Blockmachine supports Reth and Erigon for Ethereum mining. **Reth is currently
+recommended for general-purpose ETH RPC mining.** Network policy today routes
+only `eth_getProof*` queries to Erigon backends — a small share of customer
+traffic. Erigon is supported for operators who already run it or who want to
+specifically target the proof-tier workload, but expect substantially lower
+earnings than a Reth deployment.
+
 ## Getting started
 
 ### Install the Blockmachine CLI
