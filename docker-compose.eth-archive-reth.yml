@@ -60,6 +60,7 @@ services:
       - --http.addr=0.0.0.0
       - --http.port=8545
       - --http.api=eth,net,web3
+      - --rpc.eth-proof-window=8241
       - --http.corsdomain=*
       - --ws
       - --ws.addr=0.0.0.0
