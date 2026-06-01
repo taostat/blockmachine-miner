@@ -53,13 +53,15 @@ Customer → Gateway → Your Node
 | Disk | 250 GB NVMe | ~3 TB NVMe | ~6 TB NVMe |
 | Sync time | Hours (P2P) | ~24-48h from snapshot | A day or more (built-in torrent fetch) |
 | Ports | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303 |
-| Serves | Recent `eth_*` + `eth_subscribe` over WS | All `eth_*` for any historical block (bodies, receipts, logs) + tip-state proofs | **Network policy: `eth_getProof*` only** (see note below) |
+| Serves | Recent `eth_*` + `eth_subscribe` over WS | `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) at any depth | **Network policy: `eth_getProof` only** (see note below) |
 
 **Choosing your tier:**
 
-- **Latest (reth `--full`):** the lowest-cost option. Serves recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h; cannot answer historical state or proof queries.
-- **Archive Reth:** full historical bodies, receipts, logs, headers, and state. Serves the bulk of customer ETH RPC traffic. Generates state proofs at tip; deeper proofs return `-32602 ExceedsMaxProofWindow` and the gateway transparently retries against an Archive Erigon backend.
-- **Archive Erigon:** the network currently routes Erigon backends to `eth_getProof*` requests only — all other ETH methods are served by Reth backends. This is a network-level policy driven by validator verification not yet supporting Erigon's response serialisation. Erigon operators today receive a narrow slice of traffic (high-value per-call, low volume) compared to the Reth tiers. Revisit when validator-side Erigon support ships.
+- **Latest (reth `--full`):** general-purpose RPC, recent state only. Earns from `eth_*` at tip — recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h, so this tier cannot answer historical state or proof queries.
+- **Archive Reth:** general-purpose RPC, full archive. Earns from the bulk of customer ETH RPC: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. Does not serve `eth_getProof` — proof traffic routes to Archive Erigon.
+- **Archive Erigon:** proof specialist. Earns from `eth_getProof` at any depth. Erigon's responses differ from Reth's audit reference, so the network restricts this tier to proof traffic only — all other ETH methods route to Reth backends. A narrow but high-value slice of total ETH volume. Revisit when validator-side Erigon support ships.
+
+Each tier is matched to traffic based on its capabilities. Latest earns from current-state queries; Archive Reth earns from the bulk of customer ETH RPC including historical traces and logs; Archive Erigon is a specialist tier serving `eth_getProof` exclusively. The network's gateway routes per-method based on the capabilities you advertise, so you only see traffic you can serve.
 
 Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Archive tiers benefit substantially from NVMe storage. The install script handles all dependencies (Docker, git, certificates).
 
@@ -67,7 +69,7 @@ Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Arch
 
 Blockmachine supports Reth and Erigon for Ethereum mining. **Reth is currently
 recommended for general-purpose ETH RPC mining.** Network policy today routes
-only `eth_getProof*` queries to Erigon backends — a small share of customer
+only `eth_getProof` queries to Erigon backends — a small share of customer
 traffic. Erigon is supported for operators who already run it or who want to
 specifically target the proof-tier workload, but expect substantially lower
 earnings than a Reth deployment.
@@ -298,9 +300,9 @@ docker compose -f docker-compose.eth.yml up -d
 
 ### Ethereum: archive-reth
 
-Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis, plus tip-state proofs. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). Sync from a snapshot typically takes 24-48h; from scratch over P2P, considerably longer. Same Lighthouse beacon sidecar as the Latest tier.
+Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). Sync from a snapshot typically takes 24-48h; from scratch over P2P, considerably longer. Same Lighthouse beacon sidecar as the Latest tier.
 
-This tier serves the bulk of customer ETH RPC traffic on the network: every `eth_*` method against any historical block, plus state proofs at tip. Deeper-window `eth_getProof` calls return `-32602 ExceedsMaxProofWindow`; the gateway transparently retries against an Archive Erigon backend.
+This tier serves the bulk of customer ETH RPC traffic on the network: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. The network routes `eth_getProof` to Archive Erigon backends — capability-based, not error-fallback — so Reth-archive operators don't generate proofs.
 
 To start an archive-reth node manually:
 
@@ -314,7 +316,7 @@ Erigon with `--prune.mode=archive`, plus erigon's built-in Caplin consensus clie
 
 The `--prune.mode=archive` flag must be set before the first sync. It cannot be changed afterwards — you would have to resync from scratch.
 
-**Network routing policy:** validator verification does not yet support Erigon's response serialisation, so the network restricts Erigon backends to `eth_getProof*` requests. All other ETH methods route to Reth backends (Latest or Archive Reth). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
+**Network routing policy:** Erigon's responses differ from Reth's audit reference, so the network restricts Erigon backends to `eth_getProof` requests. All other ETH methods route to Reth backends (Latest or Archive Reth). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
 
 To start an archive-erigon node manually:
 
