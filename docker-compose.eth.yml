@@ -122,7 +122,6 @@ services:
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
-      EL_CLIENT: reth
       ETH_TIER: latest
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}

@@ -1,7 +1,6 @@
 """Ethereum chain metrics — JSON-RPC probes, beacon API probes, and native scrape.
 
-Shared across all three ETH tiers (latest / archive-reth / archive-erigon).
-The EL client is identified via the EL_CLIENT env var (reth | erigon).
+Shared across both ETH tiers (latest / archive-reth); the EL is always reth.
 Customer-facing metric names mirror the tao set (blockmachine_node_*) so
 dashboards work across chains.
 """
@@ -25,13 +24,12 @@ _cached_client_version = None
 
 def add_eth_mode_metrics(metrics):
     tier = os.getenv("ETH_TIER", "latest")
-    el_client = os.getenv("EL_CLIENT", "reth")
     metrics.add(
         "blockmachine_node_mode_info",
         "Configured Ethereum node mode.",
         "gauge",
         1,
-        {"chain": "eth", "tier": tier, "el_client": el_client},
+        {"chain": "eth", "tier": tier, "el_client": "reth"},
     )
     metrics.add(
         "blockmachine_node_archive_mode",
@@ -138,7 +136,7 @@ def add_eth_rpc_metrics(metrics):
         1,
         {
             "chain": "eth",
-            "el_client": os.getenv("EL_CLIENT", "reth"),
+            "el_client": "reth",
             "chain_id": str(_cached_chain_id) if _cached_chain_id is not None else "unknown",
             "node_version": _cached_client_version or "unknown",
         },
@@ -156,7 +154,6 @@ def add_eth_rpc_metrics(metrics):
 def add_cl_metrics(metrics):
     cl_url = os.getenv("CL_RPC_URL", "")
     if not cl_url:
-        # Archive Erigon uses erigon's built-in Caplin CL; no separate beacon endpoint to probe.
         return
     endpoint = f"{cl_url}/eth/v1/node/syncing"
 
@@ -201,7 +198,7 @@ def add_cl_metrics(metrics):
 
 
 # Reth uses port 9101 not the default 9001, which would clash with Lighthouse's
-# QUIC discovery port. Erigon serves on 6060.
+# QUIC discovery port.
 _EL_PROCESS_SAMPLES = {
     "process_cpu_seconds_total": (
         "blockmachine_node_process_cpu_seconds_total",

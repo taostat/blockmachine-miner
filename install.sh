@@ -241,18 +241,10 @@ BM_MINER_GIT_BRANCH=${git_branch}
 EOF
 
   if [ "$chain_id" = "eth" ]; then
-    # Erigon serves HTTP and WS on the same port; reth uses 8545/8546 split.
-    local el_client="reth"
-    local ws_port=8546
-    if [ "$tier" = "archive-erigon" ]; then
-      el_client="erigon"
-      ws_port=8545
-    fi
     cat >> "$env_file" <<EOF
 ETH_TIER=${tier}
-EL_CLIENT=${el_client}
 BACKEND_HTTP_PORT=8545
-BACKEND_WS_PORT=${ws_port}
+BACKEND_WS_PORT=8546
 EOF
   else
     echo "BACKEND_PORT=9944" >> "$env_file"
@@ -361,7 +353,6 @@ wait_for_sync_eth() {
   info "Waiting for node to sync..."
   echo "    Latest tier (reth --full):   hours via P2P."
   echo "    Archive Reth (reth default): ~24-48h from a snapshot."
-  echo "    Archive Erigon (erigon):     a day or more (built-in torrent fetch)."
   echo "    (Ctrl+C to skip — sync continues in the background)"
   echo ""
 
@@ -468,7 +459,7 @@ main() {
   echo ""
   echo "Which blockchain will this miner serve?"
   echo "  tao - Bittensor subtensor (default)"
-  echo "  eth - Ethereum mainnet (reth Latest, reth Archive, or erigon Archive)"
+  echo "  eth - Ethereum mainnet (reth Latest or reth Archive)"
   chain=$(prompt_value "Chain" "tao")
   chain="${chain,,}"
   case "$chain" in
@@ -523,9 +514,8 @@ main() {
   if [ "$chain" = "eth" ]; then
     echo ""
     echo "Ethereum tier:"
-    echo "  latest         - reth --full,   ~250 GB,  recent state + recent history"
-    echo "  archive-reth   - reth default,  ~3 TB,    full history + tip-state proofs"
-    echo "  archive-erigon - erigon,        ~6 TB,    deep getProof only (per network policy)"
+    echo "  latest        - reth --full,  ~250 GB,  recent state + recent history"
+    echo "  archive-reth  - reth default, ~3 TB,    full history + state proofs up to 8241 blocks deep"
     eth_tier=$(prompt_value "Tier" "latest")
     eth_tier="${eth_tier,,}"
     case "$eth_tier" in
@@ -539,24 +529,11 @@ main() {
         echo ""
         echo "  Archive Reth uses reth in default (non-pruned) mode and requires"
         echo "  ~3 TB of fast SSD/NVMe. Sync from a snapshot typically takes 24-48h."
-        echo "  Serves full historical bodies/receipts/logs plus tip-state proofs;"
-        echo "  deeper proofs route to Archive Erigon backends on the network."
-        ;;
-      archive-erigon)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Erigon tier"
-        check_tier_disk 6000 "ETH Archive Erigon tier"
-        echo ""
-        echo "  Archive Erigon uses erigon and requires ~6 TB of fast SSD/NVMe."
-        echo "  Initial sync from torrents/peers takes a day or more."
-        echo ""
-        echo "  Note: Erigon support is included, but Blockmachine's current network"
-        echo "  policy routes only eth_getProof* traffic to Erigon backends. This"
-        echo "  is a small share of customer volume today. If you're choosing a"
-        echo "  client for general ETH RPC mining, Reth is currently recommended."
-        echo "  You can continue with Erigon — proceeding now."
+        echo "  Serves full historical bodies/receipts/logs plus state proofs at"
+        echo "  any depth Helios can verify (within the 8,241-block window)."
         ;;
       *)
-        error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
+        error "Unknown tier '${eth_tier}'. Choose 'latest' or 'archive-reth'."
         ;;
     esac
   else
@@ -574,8 +551,8 @@ main() {
     fi
   fi
 
-  # Snapshot (tao archive nodes only — eth archive uses erigon's built-in
-  # torrent-based snapshot fetch, so no URL prompt is needed).
+  # Snapshot (tao archive nodes only — eth archive operators restore a reth
+  # snapshot out-of-band before re-running this script, so no URL prompt here).
   snapshot_url=""
   snapshot_stream=false
   if [ "$chain" = "tao" ] && [ "$archive" = true ]; then
@@ -642,8 +619,8 @@ main() {
     info "Stopping any existing services for re-install..."
     for f in docker-compose.yml \
              docker-compose.eth.yml \
-             docker-compose.eth-archive-reth.yml \
-             docker-compose.eth-archive.yml; do
+             docker-compose.eth-archive.yml \
+             docker-compose.eth-archive-reth.yml; do
       if [ -f "${INSTALL_DIR}/${f}" ]; then
         docker compose -f "${INSTALL_DIR}/${f}" down --remove-orphans 2>/dev/null || true
       fi
@@ -661,18 +638,10 @@ main() {
   check_port "$p2p_port" tcp
   if [ "$chain" = "eth" ]; then
     check_port "$p2p_port" udp
-    case "$eth_tier" in
-      latest|archive-reth)
-        # Both reth tiers run an external Lighthouse beacon node alongside.
-        check_port 9000 tcp
-        check_port 9000 udp
-        check_port 9001 udp
-        ;;
-      archive-erigon)
-        check_port 4000 tcp
-        check_port 4000 udp
-        ;;
-    esac
+    # Both eth tiers run an external Lighthouse beacon node alongside reth.
+    check_port 9000 tcp
+    check_port 9000 udp
+    check_port 9001 udp
   fi
 
   # Open firewall ports if ufw is active
@@ -682,15 +651,11 @@ main() {
     ufw allow 443/tcp
     ufw allow "${p2p_port}/tcp"
     ufw allow "${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
+    if [ "$chain" = "eth" ]; then
       # Lighthouse beacon P2P (TCP+UDP on 9000, QUIC discovery UDP on 9001).
       ufw allow 9000/tcp
       ufw allow 9000/udp
       ufw allow 9001/udp
-    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ]; then
-      # Caplin (erigon built-in CL) beacon P2P on port 4000.
-      ufw allow 4000/tcp
-      ufw allow 4000/udp
     fi
   fi
 
@@ -716,7 +681,7 @@ main() {
     error "Certificates required for domain without Let's Encrypt. Re-run and choose Let's Encrypt, or provide certs."
   fi
 
-  # Write .env (chain-aware: emits ETH_TIER, EL_CLIENT, BACKEND_HTTP/WS_PORT for eth)
+  # Write .env (chain-aware: emits ETH_TIER, BACKEND_HTTP/WS_PORT for eth)
   if [ "$chain" = "eth" ]; then
     write_env ".env" "$secret" "$domain" "eth" "$eth_tier"
   else
@@ -784,20 +749,19 @@ main() {
   fi
 
   # Start services. Compose file selection:
-  #   tao + lite            → docker-compose.yml
-  #   tao + archive         → docker-compose.yml + docker-compose.archive.yml
-  #   eth + latest          → docker-compose.eth.yml
-  #   eth + archive-reth    → docker-compose.eth-archive-reth.yml
-  #   eth + archive-erigon  → docker-compose.eth-archive.yml
-  #   + tls (any)           → adds docker-compose.tls.yml
+  #   tao + lite          → docker-compose.yml
+  #   tao + archive       → docker-compose.yml + docker-compose.archive.yml
+  #   eth + latest        → docker-compose.eth.yml
+  #   eth + archive-reth  → docker-compose.eth-archive.yml
+  #   + tls (any)         → adds docker-compose.tls.yml
   echo ""
   info "Starting services..."
   if [ "$chain" = "eth" ]; then
-    case "$eth_tier" in
-      archive-reth)   compose_cmd="docker compose -f docker-compose.eth-archive-reth.yml" ;;
-      archive-erigon) compose_cmd="docker compose -f docker-compose.eth-archive.yml" ;;
-      *)              compose_cmd="docker compose -f docker-compose.eth.yml" ;;
-    esac
+    if [ "$eth_tier" = "archive-reth" ]; then
+      compose_cmd="docker compose -f docker-compose.eth-archive.yml"
+    else
+      compose_cmd="docker compose -f docker-compose.eth.yml"
+    fi
   else
     compose_cmd="docker compose -f docker-compose.yml"
     if [ "$archive" = true ]; then
@@ -847,12 +811,9 @@ main() {
   echo ""
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
     local extra_ports="${p2p_port}/tcp"
-    [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
-      extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
+    if [ "$chain" = "eth" ]; then
+      extra_ports="${p2p_port}/tcp ${p2p_port}/udp 9000/tcp 9000/udp 9001/udp"
     fi
-    [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ] && \
-      extra_ports="${extra_ports} 4000/tcp 4000/udp"
 
     echo "Firewall:"
     echo "  Consider enabling a firewall if you haven't already:"
