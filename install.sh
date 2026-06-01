@@ -523,9 +523,9 @@ main() {
   if [ "$chain" = "eth" ]; then
     echo ""
     echo "Ethereum tier:"
-    echo "  latest         - reth --full,   ~250 GB,  recent state + recent history"
-    echo "  archive-reth   - reth default,  ~3 TB,    full history + tip-state proofs"
-    echo "  archive-erigon - erigon,        ~6 TB,    deep getProof only (per network policy)"
+    echo "  latest         - general-purpose RPC, recent state only — earns from eth_* at tip"
+    echo "  archive-reth   - general-purpose RPC, full archive — earns from trace_*, debug_*, eth_* at any depth (including eth_getLogs at depth)"
+    echo "  archive-erigon - proof specialist — earns from eth_getProof at any depth; responses differ from Reth's audit reference, so this tier is restricted to proof traffic only"
     eth_tier=$(prompt_value "Tier" "latest")
     eth_tier="${eth_tier,,}"
     case "$eth_tier" in
@@ -539,8 +539,9 @@ main() {
         echo ""
         echo "  Archive Reth uses reth in default (non-pruned) mode and requires"
         echo "  ~3 TB of fast SSD/NVMe. Sync from a snapshot typically takes 24-48h."
-        echo "  Serves full historical bodies/receipts/logs plus tip-state proofs;"
-        echo "  deeper proofs route to Archive Erigon backends on the network."
+        echo "  Earns from the bulk of customer ETH RPC: trace_*, debug_*, and"
+        echo "  eth_* (including eth_getLogs) against any historical block."
+        echo "  eth_getProof traffic routes to Archive Erigon backends."
         ;;
       archive-erigon)
         check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Erigon tier"
@@ -549,11 +550,12 @@ main() {
         echo "  Archive Erigon uses erigon and requires ~6 TB of fast SSD/NVMe."
         echo "  Initial sync from torrents/peers takes a day or more."
         echo ""
-        echo "  Note: Erigon support is included, but Blockmachine's current network"
-        echo "  policy routes only eth_getProof* traffic to Erigon backends. This"
-        echo "  is a small share of customer volume today. If you're choosing a"
-        echo "  client for general ETH RPC mining, Reth is currently recommended."
-        echo "  You can continue with Erigon — proceeding now."
+        echo "  This is the proof-specialist tier. Erigon's responses differ from"
+        echo "  Reth's audit reference, so the network restricts Erigon backends"
+        echo "  to eth_getProof traffic only — all other ETH methods route to"
+        echo "  Reth backends. A narrow, high-value slice of total ETH volume."
+        echo "  If you're choosing a client for general ETH RPC mining, Reth is"
+        echo "  recommended. You can continue with Erigon — proceeding now."
         ;;
       *)
         error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
