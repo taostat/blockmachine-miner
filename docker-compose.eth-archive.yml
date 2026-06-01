@@ -44,9 +44,9 @@ services:
       - --http
       - --http.addr=0.0.0.0
       - --http.port=8545
-      - --http.api=eth,net,web3,erigon,debug,trace
-      - --http.corsdomain=*
+      - --http.api=eth,net,web3
       - --ws
+      - --txpool.disable
       - --metrics
       - --metrics.addr=0.0.0.0
       - --metrics.port=6060
