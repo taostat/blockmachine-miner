@@ -75,7 +75,7 @@ services:
     environment:
       CHAIN: eth
       EL_CLIENT: erigon
-      ETH_TIER: archive
+      ETH_TIER: archive-erigon
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
