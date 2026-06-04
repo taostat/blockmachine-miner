@@ -36,10 +36,16 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        set -euo pipefail
+        set -eu
         if [ ! -s /jwt/jwt.hex ]; then
-          head -c 32 /dev/urandom | xxd -p -c 32 > /jwt/jwt.hex
-          [ -s /jwt/jwt.hex ] || { echo "ERROR: JWT generation produced empty file" >&2; exit 1; }
+          # od is present in the reth runtime image; xxd is not. -An strips the
+          # offset column, -v keeps duplicate lines, -tx1 emits one hex byte per
+          # field. tr collapses whitespace so the file is a single 64-char hex
+          # string, matching the Engine API JWT format.
+          tmp=/jwt/jwt.hex.tmp
+          head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n' > "$$tmp"
+          [ "$$(wc -c < "$$tmp")" = "64" ] || { echo "ERROR: JWT generation produced wrong length" >&2; rm -f "$$tmp"; exit 1; }
+          mv "$$tmp" /jwt/jwt.hex
           chmod 0644 /jwt/jwt.hex
           echo "Generated Engine API JWT secret"
         else
