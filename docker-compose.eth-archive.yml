@@ -60,7 +60,7 @@ services:
       - "4000:4000/tcp"
       - "4000:4000/udp"
     volumes:
-      - eth_archive_data:/data
+      - eth_data_archive_erigon:/data
     restart: unless-stopped
 
   metrics:
@@ -70,7 +70,7 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - eth_archive_data:/node-data:ro
+      - eth_data_archive_erigon:/node-data:ro
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
@@ -96,5 +96,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  eth_archive_data:
+  eth_data_archive_erigon:
   certbot_webroot:

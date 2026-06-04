@@ -78,7 +78,7 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
-      - eth_data:/data
+      - eth_data_archive_reth:/data
       - eth_jwt:/jwt:ro
     restart: unless-stopped
 
@@ -118,7 +118,7 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - eth_data:/node-data:ro
+      - eth_data_archive_reth:/node-data:ro
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
@@ -142,7 +142,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  eth_data:
+  eth_data_archive_reth:
   eth_jwt:
   lighthouse_data:
   certbot_webroot:
