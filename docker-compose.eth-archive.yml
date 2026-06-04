@@ -45,6 +45,13 @@ services:
       - --http.addr=0.0.0.0
       - --http.port=8545
       - --http.api=eth,net,web3
+      # Erigon's --http.vhosts defaults to "localhost", which rejects requests
+      # whose Host header is the customer-facing domain forwarded by the
+      # gateway (proxy_set_header Host $host). Wildcard is safe here because
+      # the gateway is the only ingress and enforces bearer-token auth.
+      # Erigon has no separate --ws.origins flag; WS shares the HTTP server's
+      # vhost allowlist, so this covers WebSocket traffic too.
+      - --http.vhosts=*
       - --ws
       - --txpool.disable
       - --metrics
