@@ -36,8 +36,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        set -euo pipefail
         if [ ! -s /jwt/jwt.hex ]; then
           head -c 32 /dev/urandom | xxd -p -c 32 > /jwt/jwt.hex
+          [ -s /jwt/jwt.hex ] || { echo "ERROR: JWT generation produced empty file" >&2; exit 1; }
           chmod 0644 /jwt/jwt.hex
           echo "Generated Engine API JWT secret"
         else
