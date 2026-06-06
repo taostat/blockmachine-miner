@@ -38,7 +38,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        set -euo pipefail
+        set -eu
         MARKER=/data/.bootstrap-complete
         if [ -f "$$MARKER" ]; then
           echo "snapshot already initialized"
