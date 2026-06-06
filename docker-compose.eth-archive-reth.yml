@@ -29,6 +29,27 @@ services:
       timeout: 10s
       retries: 3
 
+  # Bootstraps the reth datadir from Paradigm's official archive snapshot on
+  # first run. --archive pulls the archive component set, matching the node
+  # service's default (non-pruned) mode. A bootstrap marker keeps this
+  # idempotent across restarts.
+  snapshot-init:
+    image: ghcr.io/paradigmxyz/reth:v2.2.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        MARKER=/data/.bootstrap-complete
+        if [ -f "$$MARKER" ]; then
+          echo "snapshot already initialized"
+          exit 0
+        fi
+        reth download --datadir /data --chain mainnet --archive --non-interactive
+        touch "$$MARKER"
+    volumes:
+      - eth_data_archive_reth:/data
+    restart: "no"
+
   # Generates the Engine API JWT once on first run. Reuses the reth image so
   # there is no separate alpine pull and no apk install on cold start.
   jwt-init:
@@ -59,6 +80,8 @@ services:
     image: ghcr.io/paradigmxyz/reth:v2.2.0
     depends_on:
       jwt-init:
+        condition: service_completed_successfully
+      snapshot-init:
         condition: service_completed_successfully
     command:
       - node

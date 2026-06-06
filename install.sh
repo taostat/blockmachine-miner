@@ -359,9 +359,9 @@ extract_hex_field() {
 
 wait_for_sync_eth() {
   info "Waiting for node to sync..."
-  echo "    Latest tier (reth --full):   hours via P2P."
-  echo "    Archive Reth (reth default): ~24-48h from a snapshot."
-  echo "    Archive Erigon (erigon):     a day or more (built-in torrent fetch)."
+  echo "    Latest tier (reth --minimal):  ~1-2h from snapshot."
+  echo "    Archive Reth (reth default):   ~24-48h from a snapshot."
+  echo "    Archive Erigon (erigon):       a day or more (built-in torrent fetch)."
   echo "    (Ctrl+C to skip — sync continues in the background)"
   echo ""
 
@@ -531,24 +531,26 @@ main() {
     case "$eth_tier" in
       latest)
         check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
-        check_tier_disk 250 "ETH Latest tier"
+        check_tier_disk 400 "ETH Latest tier"
         ;;
       archive-reth)
         check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Reth tier"
         check_tier_disk 3000 "ETH Archive Reth tier"
         echo ""
         echo "  Archive Reth uses reth in default (non-pruned) mode and requires"
-        echo "  ~3 TB of fast SSD/NVMe. Sync from a snapshot typically takes 24-48h."
+        echo "  ~3 TB of fast SSD/NVMe. The compose file bootstraps the datadir"
+        echo "  from Paradigm's archive snapshot, reaching live tip in ~1-2h."
         echo "  Earns from the bulk of customer ETH RPC: trace_*, debug_*, and"
         echo "  eth_* (including eth_getLogs) against any historical block."
         echo "  eth_getProof traffic routes to Archive Erigon backends."
         ;;
       archive-erigon)
         check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Erigon tier"
-        check_tier_disk 6000 "ETH Archive Erigon tier"
+        check_tier_disk 700 "ETH Archive Erigon tier"
         echo ""
-        echo "  Archive Erigon uses erigon and requires ~6 TB of fast SSD/NVMe."
-        echo "  Initial sync from torrents/peers takes a day or more."
+        echo "  Archive Erigon uses erigon with state/history pruned beyond the"
+        echo "  last ~10,064 blocks (~33h) — disk footprint ~500 GB. Initial sync"
+        echo "  from torrents/peers takes a day or more."
         echo ""
         echo "  This is the proof-specialist tier. Erigon's responses differ from"
         echo "  Reth's audit reference, so the network restricts Erigon backends"
