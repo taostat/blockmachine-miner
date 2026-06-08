@@ -1,6 +1,15 @@
 # Blockmachine Miner
 
-Run a Bittensor subtensor node behind an authenticated gateway and earn by serving RPC requests through the Blockmachine network (Bittensor Subnet 19).
+Run a blockchain RPC node behind an authenticated gateway and earn by serving RPC requests through the Blockmachine network (Bittensor Subnet 19).
+
+Supported chains:
+
+| Chain | Tiers | Client |
+|-------|-------|--------|
+| `tao` (Bittensor subtensor) | `lite`, `archive` | subtensor |
+| `eth` (Ethereum mainnet) | `latest`, `archive-reth`, `archive-erigon` | reth (latest, archive-reth), erigon (archive-erigon) |
+
+The install script picks the right stack based on your choice of chain and tier — see [Getting started](#getting-started) below.
 
 Blockmachine is a decentralized marketplace for blockchain RPC infrastructure. Miners compete on price and quality to serve customer requests routed by the protocol gateway. You set your own price per Compute Unit (CU) and earn emissions proportional to the work you deliver.
 
@@ -23,17 +32,47 @@ Customer → Gateway → Your Node
 
 ## Prerequisites
 
-| Resource | Lite node | Archive node |
-|----------|-----------|--------------|
+### Subtensor (chain: `tao`)
+
+| Resource | Lite | Archive |
+|----------|------|---------|
 | Architecture | x86_64 | x86_64 |
 | CPU | 4+ cores | 4+ cores |
 | RAM | 16 GB+ | 16 GB+ |
 | Disk | 100 GB SSD | 4+ TB SSD |
 | Sync time | ~15 min (warp sync) | Days (or use snapshot) |
 | Ports | 80, 443, 30333 | 80, 443, 30333 |
-| Software | Docker + Docker Compose 2.21+ | Docker + Docker Compose 2.21+ |
 
-Any VPS or dedicated server with Docker will work. The install script handles all dependencies (Docker, git, certificates).
+### Ethereum (chain: `eth`, mainnet only)
+
+| Resource | Latest (reth `--minimal`) | Archive Reth (reth default) | Archive Erigon (erigon) |
+|----------|---------------------------|-----------------------------|-------------------------|
+| Architecture | x86_64 | x86_64 | x86_64 |
+| CPU | 4+ cores | 8+ cores recommended | 8+ cores recommended |
+| RAM | 16 GB+ | 32 GB+ recommended | 32 GB+ recommended |
+| Disk | ~300 GB NVMe | ~3 TB NVMe | ~500 GB NVMe |
+| Sync time | ~1-2h from snapshot | ~24-48h from snapshot | ~1-2h from snapshot |
+| Ports | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303 |
+| Serves | Recent `eth_*` + `eth_subscribe` over WS | `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) at any depth | **Network policy: `eth_getProof` only** (see note below) |
+
+**Choosing your tier:**
+
+- **Latest (reth `--minimal`):** general-purpose RPC, recent state only. Earns from `eth_*` at tip — recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h, so this tier cannot answer historical state or proof queries.
+- **Archive Reth:** general-purpose RPC, full archive. Earns from the bulk of customer ETH RPC: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. Does not serve `eth_getProof` — proof traffic routes to Archive Erigon.
+- **Archive Erigon:** proof specialist. Earns from `eth_getProof` at any depth. Erigon's responses differ from Reth's audit reference, so the network restricts this tier to proof traffic only — all other ETH methods route to Reth backends. A narrow but high-value slice of total ETH volume. Revisit when validator-side Erigon support ships.
+
+Each tier is matched to traffic based on its capabilities. Latest earns from current-state queries; Archive Reth earns from the bulk of customer ETH RPC including historical traces and logs; Archive Erigon is a specialist tier serving `eth_getProof` exclusively. The network's gateway routes per-method based on the capabilities you advertise, so you only see traffic you can serve.
+
+Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Archive tiers benefit substantially from NVMe storage. The install script handles all dependencies (Docker, git, certificates).
+
+## Choosing your Ethereum client
+
+Blockmachine supports Reth and Erigon for Ethereum mining. **Reth is currently
+recommended for general-purpose ETH RPC mining.** Network policy today routes
+only `eth_getProof` queries to Erigon backends — a small share of customer
+traffic. Erigon is supported for operators who already run it or who want to
+specifically target the proof-tier workload, but expect substantially lower
+earnings than a Reth deployment.
 
 ## Getting started
 
@@ -82,12 +121,13 @@ bash <(curl -sSL https://blockmachine.io/miner/install.sh)
 The script will:
 - Install git and Docker if missing
 - Clone this repository (or update it if re-running)
+- Ask which chain to serve (`tao` or `eth`)
 - Ask whether you have a domain name or are using an IP address
 - Set up TLS (auto-renewing Let's Encrypt for domains, or self-signed for IPs)
-- Ask for node type (lite or archive)
-- Offer to restore from a snapshot (archive nodes only)
+- Ask for tier (`lite`/`archive` for tao, `latest`/`archive-reth`/`archive-erigon` for eth)
+- Offer to restore from a snapshot (tao archive only — eth archive tiers fetch from snapshots/torrents automatically)
 - Generate a bearer token secret
-- Start the gateway and subtensor node
+- Start the gateway and the chain node(s)
 - Print the registration commands to run from your local machine
 
 At the end you'll see output like:
@@ -188,7 +228,12 @@ scrape_configs:
 
 Metrics are operator telemetry for visibility and alerting. They are authenticated and useful for debugging sync, peer, disk, TLS, and version rollout issues, but they are not proof that a miner is honestly serving work.
 
-The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load, node data volume usage, TLS certificate expiry, the live deployed git SHA, and the native Subtensor Prometheus metrics from the node's internal `:9615` endpoint.
+The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load, node data volume usage, TLS certificate expiry, and the live deployed git SHA. It also appends the underlying client's native Prometheus output:
+
+- **tao** — Subtensor metrics from the node's internal `:9615` endpoint
+- **eth latest** — Reth metrics from `:9101`, plus a beacon-API sync probe against Lighthouse on `:5052`
+- **eth archive-reth** — Reth metrics from `:9101`, plus a beacon-API sync probe against Lighthouse on `:5052`
+- **eth archive-erigon** — Erigon metrics from `:6060/debug/metrics/prometheus`
 
 ## Pricing
 
@@ -218,15 +263,15 @@ Generated automatically during install. Valid for 10 years. The CLI pins the cer
 
 Place `cert.pem` and `key.pem` in the `ssl/` directory before running the install script. Select "no" when prompted about Let's Encrypt.
 
-## Node types
+## Node tiers
 
-### Lite (default)
+### Subtensor: lite (default)
 
 Syncs via warp sync in ~15 minutes. Serves recent blocks and current state. Lower storage requirements (~100 GB). Suitable for most RPC methods.
 
 Historical state queries for pruned blocks will return `null` — the gateway routes these to archive nodes when available.
 
-### Archive
+### Subtensor: archive
 
 Full block history from genesis. Requires 4+ TB disk and takes days to sync from scratch. To speed up initial sync, use a snapshot:
 
@@ -241,6 +286,40 @@ To start an archive node:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.archive.yml up -d
+```
+
+### Ethereum: latest
+
+Reth in `--minimal` mode: keeps the last ~10,064 blocks (~33h) of state and history, prunes the rest. Disk footprint is around 300 GB on mainnet. The compose file bootstraps the datadir from Paradigm's official snapshot via `reth download` on first run, so the node reaches live tip in ~1-2h instead of days of genesis-sync over P2P. A Lighthouse beacon node runs alongside reth and drives it via the Engine API (checkpoint-synced from `mainnet.checkpoint.sigp.io`, ready in minutes). `eth_getProof` works against any block in the ~33h window; older blocks return an error.
+
+To start a latest-tier node manually:
+
+```bash
+docker compose -f docker-compose.eth.yml up -d
+```
+
+### Ethereum: archive-reth
+
+Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). The compose file bootstraps the datadir from Paradigm's official archive snapshot via `reth download --archive` on first run — same ~1-2h wall-clock benefit over genesis P2P sync. Same Lighthouse beacon sidecar as the Latest tier.
+
+This tier serves the bulk of customer ETH RPC traffic on the network: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. The network routes `eth_getProof` to Archive Erigon backends — capability-based, not error-fallback — so Reth-archive operators don't generate proofs.
+
+To start an archive-reth node manually:
+
+```bash
+docker compose -f docker-compose.eth-archive-reth.yml up -d
+```
+
+### Ethereum: archive-erigon
+
+Erigon with `--prune.mode=full --prune.distance=10064 --prune.distance.blocks=10064`, plus Erigon's built-in Caplin consensus client (no separate Lighthouse service needed). Disk footprint is around 500 GB on mainnet. Serves `eth_getProof` and `eth_getAccount` at depths within the last ~10,064 blocks (~33h).
+
+**Network routing policy:** Erigon's responses differ from Reth's audit reference, so the network restricts Erigon backends to `eth_getProof` requests. All other ETH methods route to Reth backends (Latest or Archive Reth). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
+
+To start an archive-erigon node manually:
+
+```bash
+docker compose -f docker-compose.eth-archive.yml up -d
 ```
 
 ## Manual setup (without install script)
@@ -265,14 +344,16 @@ openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
   -keyout ssl/key.pem -out ssl/cert.pem \
   -subj "/CN=$IP" -addext "subjectAltName=IP:$IP"
 
-# Start services
-docker compose up -d
+# Start services — choose the stack for your chain and tier:
+docker compose up -d                                           # tao lite (default)
+# docker compose -f docker-compose.yml \
+#   -f docker-compose.archive.yml up -d                        # tao archive
+# docker compose -f docker-compose.eth.yml up -d               # eth latest (reth --minimal + lighthouse)
+# docker compose -f docker-compose.eth-archive-reth.yml up -d  # eth archive-reth (reth default + lighthouse)
+# docker compose -f docker-compose.eth-archive.yml up -d       # eth archive-erigon (erigon + caplin)
 
-# For archive node, add the archive overlay:
-# docker compose -f docker-compose.yml -f docker-compose.archive.yml up -d
-
-# For Let's Encrypt, add the TLS overlay:
-# docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+# For Let's Encrypt, add the TLS overlay (works for any chain):
+# docker compose -f <chain-compose>.yml -f docker-compose.tls.yml up -d
 ```
 
 Then register from your local machine:
@@ -313,8 +394,8 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 └──────────────────────────────────────────────┘
 ```
 
-- **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket connections to the subtensor node. Supports dual secrets for zero-downtime rotation.
-- **subtensor node** — Bittensor chain node running in lite (warp sync) or archive mode.
+- **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket and HTTP RPC to the chain node. Supports dual secrets for zero-downtime rotation. The eth gateway template routes by the `Upgrade` header so a single 443 endpoint serves both JSON-RPC and `eth_subscribe`.
+- **chain node** — Either a Bittensor subtensor (lite/archive), a reth execution client driven by Lighthouse over the Engine API (eth latest with `--minimal`, or eth archive-reth in default mode), or an erigon archive with built-in Caplin CL (eth archive-erigon).
 - **metrics** — Exposes `/metrics` internally; nginx publishes it at `https://<endpoint>/metrics` with the same bearer auth as RPC.
 - **certbot** — Optional. Auto-renews Let's Encrypt certificates. Only used with domain-based setups.
 
@@ -355,12 +436,23 @@ Environment variables in `.env`:
 | `SECRET_V1` | (required) | Primary bearer token |
 | `SECRET_V2` | (empty) | Secondary token for zero-downtime rotation |
 | `DOMAIN` | (empty) | Domain for Let's Encrypt auto-renewal |
-| `BACKEND_PORT` | `9944` | Subtensor node RPC port |
+| `CHAIN` | `tao` | Chain selection: `tao` or `eth` |
 | `METRICS_PORT` | `9100` | Internal metrics exporter port |
 | `SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | TLS certificate path in container |
 | `SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | TLS key path in container |
 | `BM_MINER_GIT_SHA` | `unknown` | Deployed repository commit exposed in metrics |
 | `BM_MINER_GIT_BRANCH` | `unknown` | Deployed repository branch exposed in metrics |
+
+Chain-specific:
+
+| Variable | Default | Used by | Description |
+|----------|---------|---------|-------------|
+| `BACKEND_PORT` | `9944` | tao | Subtensor node RPC port |
+| `ETH_TIER` | (empty) | eth | `latest`, `archive-reth`, or `archive-erigon` |
+| `EL_CLIENT` | (empty) | eth | `reth` (latest, archive-reth) or `erigon` (archive-erigon) |
+| `BACKEND_HTTP_PORT` | `8545` | eth | EL HTTP JSON-RPC port |
+| `BACKEND_WS_PORT` | `8546` (reth) / `8545` (erigon) | eth | EL WebSocket port |
+| `CHECKPOINT_SYNC_URL` | `https://mainnet.checkpoint.sigp.io` | eth latest, eth archive-reth | Lighthouse beacon checkpoint source |
 
 ## Day-to-day operations
 
@@ -377,10 +469,29 @@ curl -fsS -H "Authorization: Bearer $SECRET_V1" https://<endpoint>/metrics
 
 ### Updating
 
-Pull the latest config and subtensor image, then restart:
+Pull the latest config and chain images, then restart. Use the same compose
+file the install script started — bare `docker compose` defaults to
+`docker-compose.yml` (the subtensor stack), which would replace an eth stack's
+containers with subtensor ones because service names collide.
 
 ```bash
+# Subtensor (lite or archive):
 cd /root/blockmachine-miner && git pull && docker compose pull && docker compose up -d
+
+# Ethereum latest:
+cd /root/blockmachine-miner && git pull \
+  && docker compose -f docker-compose.eth.yml pull \
+  && docker compose -f docker-compose.eth.yml up -d
+
+# Ethereum archive-reth:
+cd /root/blockmachine-miner && git pull \
+  && docker compose -f docker-compose.eth-archive-reth.yml pull \
+  && docker compose -f docker-compose.eth-archive-reth.yml up -d
+
+# Ethereum archive-erigon:
+cd /root/blockmachine-miner && git pull \
+  && docker compose -f docker-compose.eth-archive.yml pull \
+  && docker compose -f docker-compose.eth-archive.yml up -d
 ```
 
 Or re-run the install script — it updates the repo automatically:
@@ -392,7 +503,10 @@ bash <(curl -sSL https://blockmachine.io/miner/install.sh)
 ### Stopping
 
 ```bash
-docker compose down
+docker compose down                                       # subtensor
+docker compose -f docker-compose.eth.yml down             # eth latest
+docker compose -f docker-compose.eth-archive-reth.yml down # eth archive-reth
+docker compose -f docker-compose.eth-archive.yml down     # eth archive-erigon
 ```
 
 Node data is persisted in a Docker volume (`node_data`). Restarting will resume from where it left off.

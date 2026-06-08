@@ -16,6 +16,7 @@ LISTEN_ADDR = os.getenv("METRICS_LISTEN_ADDR", "0.0.0.0")
 LISTEN_PORT = int(os.getenv("METRICS_PORT", "9100"))
 METRICS_SECRET_V1 = os.getenv("METRICS_SECRET_V1", "")
 METRICS_SECRET_V2 = os.getenv("METRICS_SECRET_V2", "")
+CHAIN = os.getenv("CHAIN", "tao")
 RPC_URL = os.getenv("NODE_RPC_URL", "http://node:9944")
 NATIVE_METRICS_URL = os.getenv("NODE_NATIVE_METRICS_URL", "http://node:9615/metrics")
 GATEWAY_HEALTH_URL = os.getenv("GATEWAY_HEALTH_URL", "http://gateway/health")
@@ -250,7 +251,7 @@ def add_build_metrics(metrics):
     )
 
 
-def add_node_mode_metrics(metrics):
+def add_tao_mode_metrics(metrics):
     mode = os.getenv("NODE_MODE", "lite")
     sync = os.getenv("NODE_SYNC", "warp")
     database = os.getenv("NODE_DATABASE", "paritydb")
@@ -269,7 +270,7 @@ def add_node_mode_metrics(metrics):
     )
 
 
-def add_node_rpc_metrics(metrics):
+def add_tao_rpc_metrics(metrics):
     health, latency = safe_rpc("system_health")
     rpc_up = isinstance(health, dict)
     metrics.add(
@@ -398,7 +399,7 @@ def add_node_rpc_metrics(metrics):
         )
 
 
-def add_native_subtensor_metrics(metrics):
+def add_tao_native_metrics(metrics):
     text, latency = safe_fetch_text(NATIVE_METRICS_URL)
     native_up = text is not None
     metrics.add(
@@ -657,9 +658,26 @@ def collect_metrics():
     )
 
     add_build_metrics(metrics)
-    add_node_mode_metrics(metrics)
-    add_node_rpc_metrics(metrics)
-    native_text = add_native_subtensor_metrics(metrics)
+
+    native_text = None
+    if CHAIN == "tao":
+        add_tao_mode_metrics(metrics)
+        add_tao_rpc_metrics(metrics)
+        native_text = add_tao_native_metrics(metrics)
+    elif CHAIN == "eth":
+        from eth_metrics import (
+            add_cl_metrics,
+            add_eth_mode_metrics,
+            add_eth_native_metrics,
+            add_eth_rpc_metrics,
+        )
+        add_eth_mode_metrics(metrics)
+        add_eth_rpc_metrics(metrics)
+        add_cl_metrics(metrics)
+        native_text = add_eth_native_metrics(metrics)
+    else:
+        raise ValueError(f"Unknown CHAIN={CHAIN!r}; expected 'tao' or 'eth'")
+
     add_gateway_metrics(metrics)
     add_disk_metrics(metrics)
     add_host_metrics(metrics)
@@ -673,7 +691,7 @@ def collect_metrics():
     )
     rendered = metrics.render()
     if native_text:
-        rendered += "\n# Native Subtensor metrics from node:9615\n"
+        rendered += f"\n# Native node metrics from {NATIVE_METRICS_URL}\n"
         rendered += native_text
         if not rendered.endswith("\n"):
             rendered += "\n"
