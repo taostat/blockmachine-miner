@@ -45,21 +45,23 @@ Customer → Gateway → Your Node
 
 ### Ethereum (chain: `eth`, mainnet only)
 
-| Resource | Latest (reth `--full`) | Archive Reth (reth default) | Archive Erigon (erigon) |
-|----------|------------------------|-----------------------------|-------------------------|
+| Resource | Latest (reth `--minimal`) | Archive Reth (reth default) | Archive Erigon (erigon) |
+|----------|---------------------------|-----------------------------|-------------------------|
 | Architecture | x86_64 | x86_64 | x86_64 |
 | CPU | 4+ cores | 8+ cores recommended | 8+ cores recommended |
 | RAM | 16 GB+ | 32 GB+ recommended | 32 GB+ recommended |
-| Disk | 250 GB NVMe | ~3 TB NVMe | ~6 TB NVMe |
-| Sync time | Hours (P2P) | ~24-48h from snapshot | A day or more (built-in torrent fetch) |
+| Disk | ~300 GB NVMe | ~3 TB NVMe | ~500 GB NVMe |
+| Sync time | ~1-2h from snapshot | ~24-48h from snapshot | ~1-2h from snapshot |
 | Ports | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303 |
-| Serves | Recent `eth_*` + `eth_subscribe` over WS | All `eth_*` for any historical block (bodies, receipts, logs) + tip-state proofs | **Network policy: `eth_getProof*` only** (see note below) |
+| Serves | Recent `eth_*` + `eth_subscribe` over WS | `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) at any depth | **Network policy: `eth_getProof` only** (see note below) |
 
 **Choosing your tier:**
 
-- **Latest (reth `--full`):** the lowest-cost option. Serves recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h; cannot answer historical state or proof queries.
-- **Archive Reth:** full historical bodies, receipts, logs, headers, and state. Serves the bulk of customer ETH RPC traffic. Generates state proofs at tip; deeper proofs return `-32602 ExceedsMaxProofWindow` and the gateway transparently retries against an Archive Erigon backend.
-- **Archive Erigon:** the network currently routes Erigon backends to `eth_getProof*` requests only — all other ETH methods are served by Reth backends. This is a network-level policy driven by validator verification not yet supporting Erigon's response serialisation. Erigon operators today receive a narrow slice of traffic (high-value per-call, low volume) compared to the Reth tiers. Revisit when validator-side Erigon support ships.
+- **Latest (reth `--minimal`):** general-purpose RPC, recent state only. Earns from `eth_*` at tip — recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h, so this tier cannot answer historical state or proof queries.
+- **Archive Reth:** general-purpose RPC, full archive. Earns from the bulk of customer ETH RPC: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. Does not serve `eth_getProof` — proof traffic routes to Archive Erigon.
+- **Archive Erigon:** proof specialist. Earns from `eth_getProof` at any depth. Erigon's responses differ from Reth's audit reference, so the network restricts this tier to proof traffic only — all other ETH methods route to Reth backends. A narrow but high-value slice of total ETH volume. Revisit when validator-side Erigon support ships.
+
+Each tier is matched to traffic based on its capabilities. Latest earns from current-state queries; Archive Reth earns from the bulk of customer ETH RPC including historical traces and logs; Archive Erigon is a specialist tier serving `eth_getProof` exclusively. The network's gateway routes per-method based on the capabilities you advertise, so you only see traffic you can serve.
 
 Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Archive tiers benefit substantially from NVMe storage. The install script handles all dependencies (Docker, git, certificates).
 
@@ -67,7 +69,7 @@ Any VPS or dedicated server with Docker will work for `tao` and ETH Latest. Arch
 
 Blockmachine supports Reth and Erigon for Ethereum mining. **Reth is currently
 recommended for general-purpose ETH RPC mining.** Network policy today routes
-only `eth_getProof*` queries to Erigon backends — a small share of customer
+only `eth_getProof` queries to Erigon backends — a small share of customer
 traffic. Erigon is supported for operators who already run it or who want to
 specifically target the proof-tier workload, but expect substantially lower
 earnings than a Reth deployment.
@@ -288,7 +290,7 @@ docker compose -f docker-compose.yml -f docker-compose.archive.yml up -d
 
 ### Ethereum: latest
 
-Reth `--full` preset: serves the latest state plus a rolling ~34-hour window of historical state. Disk footprint is around 240 GB on mainnet. `eth_getProof` works against any block in the window; older blocks return an error. Sync from scratch over P2P takes hours; a Lighthouse beacon node runs alongside reth and drives it via the Engine API (checkpoint-synced from `mainnet.checkpoint.sigp.io`, ready in minutes).
+Reth in `--minimal` mode: keeps the last ~10,064 blocks (~33h) of state and history, prunes the rest. Disk footprint is around 300 GB on mainnet. The compose file bootstraps the datadir from Paradigm's official snapshot via `reth download` on first run, so the node reaches live tip in ~1-2h instead of days of genesis-sync over P2P. A Lighthouse beacon node runs alongside reth and drives it via the Engine API (checkpoint-synced from `mainnet.checkpoint.sigp.io`, ready in minutes). `eth_getProof` works against any block in the ~33h window; older blocks return an error.
 
 To start a latest-tier node manually:
 
@@ -298,9 +300,9 @@ docker compose -f docker-compose.eth.yml up -d
 
 ### Ethereum: archive-reth
 
-Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis, plus tip-state proofs. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). Sync from a snapshot typically takes 24-48h; from scratch over P2P, considerably longer. Same Lighthouse beacon sidecar as the Latest tier.
+Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). The compose file bootstraps the datadir from Paradigm's official archive snapshot via `reth download --archive` on first run — same ~1-2h wall-clock benefit over genesis P2P sync. Same Lighthouse beacon sidecar as the Latest tier.
 
-This tier serves the bulk of customer ETH RPC traffic on the network: every `eth_*` method against any historical block, plus state proofs at tip. Deeper-window `eth_getProof` calls return `-32602 ExceedsMaxProofWindow`; the gateway transparently retries against an Archive Erigon backend.
+This tier serves the bulk of customer ETH RPC traffic on the network: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. The network routes `eth_getProof` to Archive Erigon backends — capability-based, not error-fallback — so Reth-archive operators don't generate proofs.
 
 To start an archive-reth node manually:
 
@@ -310,11 +312,9 @@ docker compose -f docker-compose.eth-archive-reth.yml up -d
 
 ### Ethereum: archive-erigon
 
-Erigon with `--prune.mode=archive`, plus erigon's built-in Caplin consensus client (no separate Lighthouse service needed). Disk footprint is around 5.7 TB on mainnet (allow ~6 TB headroom for state, snapshots, and temp). Serves `eth_getProof`, `debug_*`, and `trace_*` against every block back to genesis. Initial sync downloads erigon's pre-built snapshots via torrents and typically takes a day or more.
+Erigon with `--prune.mode=full --prune.distance=10064 --prune.distance.blocks=10064`, plus Erigon's built-in Caplin consensus client (no separate Lighthouse service needed). Disk footprint is around 500 GB on mainnet. Serves `eth_getProof` and `eth_getAccount` at depths within the last ~10,064 blocks (~33h).
 
-The `--prune.mode=archive` flag must be set before the first sync. It cannot be changed afterwards — you would have to resync from scratch.
-
-**Network routing policy:** validator verification does not yet support Erigon's response serialisation, so the network restricts Erigon backends to `eth_getProof*` requests. All other ETH methods route to Reth backends (Latest or Archive Reth). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
+**Network routing policy:** Erigon's responses differ from Reth's audit reference, so the network restricts Erigon backends to `eth_getProof` requests. All other ETH methods route to Reth backends (Latest or Archive Reth). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
 
 To start an archive-erigon node manually:
 
@@ -348,7 +348,7 @@ openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
 docker compose up -d                                           # tao lite (default)
 # docker compose -f docker-compose.yml \
 #   -f docker-compose.archive.yml up -d                        # tao archive
-# docker compose -f docker-compose.eth.yml up -d               # eth latest (reth --full + lighthouse)
+# docker compose -f docker-compose.eth.yml up -d               # eth latest (reth --minimal + lighthouse)
 # docker compose -f docker-compose.eth-archive-reth.yml up -d  # eth archive-reth (reth default + lighthouse)
 # docker compose -f docker-compose.eth-archive.yml up -d       # eth archive-erigon (erigon + caplin)
 
@@ -395,7 +395,7 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 ```
 
 - **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket and HTTP RPC to the chain node. Supports dual secrets for zero-downtime rotation. The eth gateway template routes by the `Upgrade` header so a single 443 endpoint serves both JSON-RPC and `eth_subscribe`.
-- **chain node** — Either a Bittensor subtensor (lite/archive), a reth execution client driven by Lighthouse over the Engine API (eth latest with `--full`, or eth archive-reth in default mode), or an erigon archive with built-in Caplin CL (eth archive-erigon).
+- **chain node** — Either a Bittensor subtensor (lite/archive), a reth execution client driven by Lighthouse over the Engine API (eth latest with `--minimal`, or eth archive-reth in default mode), or an erigon archive with built-in Caplin CL (eth archive-erigon).
 - **metrics** — Exposes `/metrics` internally; nginx publishes it at `https://<endpoint>/metrics` with the same bearer auth as RPC.
 - **certbot** — Optional. Auto-renews Let's Encrypt certificates. Only used with domain-based setups.
 

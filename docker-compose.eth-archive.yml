@@ -40,13 +40,27 @@ services:
     command:
       - --chain=mainnet
       - --datadir=/data
-      - --prune.mode=archive
+      # Prune block bodies, receipts, and state history beyond the last ~10,064
+      # blocks (~33h). The gateway routes only eth_getProof / eth_getAccount to
+      # Erigon, both of which read live state + headers — neither is pruned —
+      # so this reduces the on-disk footprint by ~92% (5.7 TB → ~500 GB) with
+      # no impact on the served methods.
+      - --prune.mode=full
+      - --prune.distance=10064
+      - --prune.distance.blocks=10064
       - --http
       - --http.addr=0.0.0.0
       - --http.port=8545
-      - --http.api=eth,net,web3,erigon,debug,trace
-      - --http.corsdomain=*
+      - --http.api=eth,net,web3
+      # Erigon's --http.vhosts defaults to "localhost", which rejects requests
+      # whose Host header is the customer-facing domain forwarded by the
+      # gateway (proxy_set_header Host $host). Wildcard is safe here because
+      # the gateway is the only ingress and enforces bearer-token auth.
+      # Erigon has no separate --ws.origins flag; WS shares the HTTP server's
+      # vhost allowlist, so this covers WebSocket traffic too.
+      - --http.vhosts=*
       - --ws
+      - --txpool.disable
       - --metrics
       - --metrics.addr=0.0.0.0
       - --metrics.port=6060
@@ -60,7 +74,7 @@ services:
       - "4000:4000/tcp"
       - "4000:4000/udp"
     volumes:
-      - eth_archive_data:/data
+      - eth_data_archive_erigon:/data
     restart: unless-stopped
 
   metrics:
@@ -70,12 +84,12 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - eth_archive_data:/node-data:ro
+      - eth_data_archive_erigon:/node-data:ro
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
       EL_CLIENT: erigon
-      ETH_TIER: archive
+      ETH_TIER: archive-erigon
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
@@ -96,5 +110,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  eth_archive_data:
+  eth_data_archive_erigon:
   certbot_webroot:
