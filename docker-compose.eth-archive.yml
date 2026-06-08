@@ -10,11 +10,8 @@ services:
       SECRET_V1: ${SECRET_V1}
       SECRET_V2: ${SECRET_V2:-}
       BACKEND_HOST: node
-      # Erigon exposes HTTP and WebSocket on the same port (8545); map both
-      # backends to it so the gateway's Upgrade-header routing still works
-      # with no template change.
       BACKEND_HTTP_PORT: ${BACKEND_HTTP_PORT:-8545}
-      BACKEND_WS_PORT: ${BACKEND_WS_PORT:-8545}
+      BACKEND_WS_PORT: ${BACKEND_WS_PORT:-8546}
       METRICS_HOST: metrics
       METRICS_PORT: ${METRICS_PORT:-9100}
       SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
@@ -32,49 +29,115 @@ services:
       timeout: 10s
       retries: 3
 
-  # Erigon ships with a built-in CL (Caplin), so the Latest tier's separate
-  # Lighthouse and JWT init services are not needed here. To run an external
-  # CL instead, override the command with --externalcl and add a CL service.
-  node:
-    image: erigontech/erigon:v3.4.1
+  # Bootstraps the reth datadir from Paradigm's official archive snapshot on
+  # first run. --archive pulls the archive component set, matching the node
+  # service's default (non-pruned) mode. A bootstrap marker keeps this
+  # idempotent across restarts.
+  snapshot-init:
+    image: ghcr.io/paradigmxyz/reth:v2.2.0
+    entrypoint: ["/bin/sh", "-c"]
     command:
+      - |
+        set -eu
+        MARKER=/data/.bootstrap-complete
+        if [ -f "$$MARKER" ]; then
+          echo "snapshot already initialized"
+          exit 0
+        fi
+        reth download --datadir /data --chain mainnet --archive --non-interactive
+        touch "$$MARKER"
+    volumes:
+      - eth_data_archive_reth:/data
+    restart: "no"
+
+  # Generates the Engine API JWT once on first run. Reuses the reth image so
+  # there is no separate alpine pull and no apk install on cold start.
+  jwt-init:
+    image: ghcr.io/paradigmxyz/reth:v2.2.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ ! -s /jwt/jwt.hex ]; then
+          # od is present in the reth runtime image; xxd is not. -An strips the
+          # offset column, -v keeps duplicate lines, -tx1 emits one hex byte per
+          # field. tr collapses whitespace so the file is a single 64-char hex
+          # string, matching the Engine API JWT format.
+          tmp=/jwt/jwt.hex.tmp
+          head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n' > "$$tmp"
+          [ "$$(wc -c < "$$tmp")" = "64" ] || { echo "ERROR: JWT generation produced wrong length" >&2; rm -f "$$tmp"; exit 1; }
+          mv "$$tmp" /jwt/jwt.hex
+          chmod 0644 /jwt/jwt.hex
+          echo "Generated Engine API JWT secret"
+        else
+          echo "Engine API JWT secret already exists"
+        fi
+    volumes:
+      - eth_jwt:/jwt
+    restart: "no"
+
+  node:
+    image: ghcr.io/paradigmxyz/reth:v2.2.0
+    depends_on:
+      jwt-init:
+        condition: service_completed_successfully
+      snapshot-init:
+        condition: service_completed_successfully
+    command:
+      - node
       - --chain=mainnet
       - --datadir=/data
-      # Prune block bodies, receipts, and state history beyond the last ~10,064
-      # blocks (~33h). The gateway routes only eth_getProof / eth_getAccount to
-      # Erigon, both of which read live state + headers — neither is pruned —
-      # so this reduces the on-disk footprint by ~92% (5.7 TB → ~500 GB) with
-      # no impact on the served methods.
-      - --prune.mode=full
-      - --prune.distance=10064
-      - --prune.distance.blocks=10064
       - --http
       - --http.addr=0.0.0.0
       - --http.port=8545
-      - --http.api=eth,net,web3
-      # Erigon's --http.vhosts defaults to "localhost", which rejects requests
-      # whose Host header is the customer-facing domain forwarded by the
-      # gateway (proxy_set_header Host $host). Wildcard is safe here because
-      # the gateway is the only ingress and enforces bearer-token auth.
-      # Erigon has no separate --ws.origins flag; WS shares the HTTP server's
-      # vhost allowlist, so this covers WebSocket traffic too.
-      - --http.vhosts=*
+      - --http.api=eth,net,web3,trace,debug
+      - --http.corsdomain=*
       - --ws
-      - --txpool.disable
-      - --metrics
-      - --metrics.addr=0.0.0.0
-      - --metrics.port=6060
+      - --ws.addr=0.0.0.0
+      - --ws.port=8546
+      - --ws.api=eth,net,web3,trace,debug
+      - --ws.origins=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --authrpc.jwtsecret=/jwt/jwt.hex
+      - --metrics=0.0.0.0:9101
       - --port=30303
-      - --p2p.allowed-ports=30303
+      - --discovery.port=30303
     ports:
       - "30303:30303/tcp"
       - "30303:30303/udp"
-      # Caplin's beacon P2P port (configurable via --caplin.discovery.port,
-      # default exposed below for inbound peer connections).
-      - "4000:4000/tcp"
-      - "4000:4000/udp"
     volumes:
-      - eth_data_archive_erigon:/data
+      - eth_data_archive_reth:/data
+      - eth_jwt:/jwt:ro
+    restart: unless-stopped
+
+  consensus:
+    image: sigp/lighthouse:v8.1.3-modern
+    depends_on:
+      jwt-init:
+        condition: service_completed_successfully
+    command:
+      - lighthouse
+      - bn
+      - --network=mainnet
+      - --datadir=/data
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=5052
+      - --execution-endpoint=http://node:8551
+      - --execution-jwt=/jwt/jwt.hex
+      - --checkpoint-sync-url=${CHECKPOINT_SYNC_URL:-https://mainnet.checkpoint.sigp.io}
+      - --disable-deposit-contract-sync
+      - --port=9000
+      - --discovery-port=9000
+      - --quic-port=9001
+    ports:
+      - "9000:9000/tcp"
+      - "9000:9000/udp"
+      - "9001:9001/udp"
+    volumes:
+      - lighthouse_data:/data
+      - eth_jwt:/jwt:ro
     restart: unless-stopped
 
   metrics:
@@ -84,20 +147,18 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - eth_data_archive_erigon:/node-data:ro
+      - eth_data_archive_reth:/node-data:ro
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
-      EL_CLIENT: erigon
-      ETH_TIER: archive-erigon
+      EL_CLIENT: reth
+      ETH_TIER: archive
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
       NODE_RPC_URL: http://node:8545
-      NODE_NATIVE_METRICS_URL: http://node:6060/debug/metrics/prometheus
-      # CL_RPC_URL deliberately empty: Caplin doesn't expose a standard
-      # beacon HTTP API by default. CL probe in exporter is skipped when unset.
-      CL_RPC_URL: ""
+      NODE_NATIVE_METRICS_URL: http://node:9101/
+      CL_RPC_URL: http://consensus:5052
       GATEWAY_HEALTH_URL: http://gateway/health
       NODE_DATA_PATH: /node-data
       HOST_PROC_PATH: /host/proc
@@ -110,5 +171,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  eth_data_archive_erigon:
+  eth_data_archive_reth:
+  eth_jwt:
+  lighthouse_data:
   certbot_webroot:

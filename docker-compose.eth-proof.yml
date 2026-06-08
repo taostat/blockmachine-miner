@@ -1,0 +1,114 @@
+services:
+  gateway:
+    image: nginx:1.31.0-alpine
+    volumes:
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./gateway/miner-gateway.eth.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
+      - ./gateway/entrypoint.sh:/docker-entrypoint.d/90-blockmachine.sh:ro
+      - certbot_webroot:/var/www/certbot:ro
+    environment:
+      SECRET_V1: ${SECRET_V1}
+      SECRET_V2: ${SECRET_V2:-}
+      BACKEND_HOST: node
+      # Erigon exposes HTTP and WebSocket on the same port (8545); map both
+      # backends to it so the gateway's Upgrade-header routing still works
+      # with no template change.
+      BACKEND_HTTP_PORT: ${BACKEND_HTTP_PORT:-8545}
+      BACKEND_WS_PORT: ${BACKEND_WS_PORT:-8545}
+      METRICS_HOST: metrics
+      METRICS_PORT: ${METRICS_PORT:-9100}
+      SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
+      SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}
+    ports:
+      - "443:443"
+      - "80:80"
+    depends_on:
+      - node
+      - metrics
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Erigon ships with a built-in CL (Caplin), so the Latest tier's separate
+  # Lighthouse and JWT init services are not needed here. To run an external
+  # CL instead, override the command with --externalcl and add a CL service.
+  node:
+    image: erigontech/erigon:v3.4.1
+    command:
+      - --chain=mainnet
+      - --datadir=/data
+      # Prune block bodies, receipts, and state history beyond the last ~10,064
+      # blocks (~33h). The gateway routes only eth_getProof / eth_getAccount to
+      # Erigon, both of which read live state + headers — neither is pruned —
+      # so this reduces the on-disk footprint by ~92% (5.7 TB → ~500 GB) with
+      # no impact on the served methods.
+      - --prune.mode=full
+      - --prune.distance=10064
+      - --prune.distance.blocks=10064
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.api=eth,net,web3
+      # Erigon's --http.vhosts defaults to "localhost", which rejects requests
+      # whose Host header is the customer-facing domain forwarded by the
+      # gateway (proxy_set_header Host $host). Wildcard is safe here because
+      # the gateway is the only ingress and enforces bearer-token auth.
+      # Erigon has no separate --ws.origins flag; WS shares the HTTP server's
+      # vhost allowlist, so this covers WebSocket traffic too.
+      - --http.vhosts=*
+      - --ws
+      - --txpool.disable
+      - --metrics
+      - --metrics.addr=0.0.0.0
+      - --metrics.port=6060
+      - --port=30303
+      - --p2p.allowed-ports=30303
+    ports:
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+      # Caplin's beacon P2P port (configurable via --caplin.discovery.port,
+      # default exposed below for inbound peer connections).
+      - "4000:4000/tcp"
+      - "4000:4000/udp"
+    volumes:
+      - eth_data_archive_erigon:/data
+    restart: unless-stopped
+
+  metrics:
+    image: python:3.12-alpine
+    command: ["python", "/app/exporter.py"]
+    volumes:
+      - ./metrics:/app:ro
+      - ./.git:/repo/.git:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - eth_data_archive_erigon:/node-data:ro
+      - /proc:/host/proc:ro
+    environment:
+      CHAIN: eth
+      EL_CLIENT: erigon
+      ETH_TIER: proof
+      METRICS_PORT: ${METRICS_PORT:-9100}
+      METRICS_SECRET_V1: ${SECRET_V1}
+      METRICS_SECRET_V2: ${SECRET_V2:-}
+      NODE_RPC_URL: http://node:8545
+      NODE_NATIVE_METRICS_URL: http://node:6060/debug/metrics/prometheus
+      # CL_RPC_URL deliberately empty: Caplin doesn't expose a standard
+      # beacon HTTP API by default. CL probe in exporter is skipped when unset.
+      CL_RPC_URL: ""
+      GATEWAY_HEALTH_URL: http://gateway/health
+      NODE_DATA_PATH: /node-data
+      HOST_PROC_PATH: /host/proc
+      GIT_DIR: /repo/.git
+      SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
+      BM_MINER_GIT_SHA: ${BM_MINER_GIT_SHA:-unknown}
+      BM_MINER_GIT_BRANCH: ${BM_MINER_GIT_BRANCH:-unknown}
+    depends_on:
+      - node
+    restart: unless-stopped
+
+volumes:
+  eth_data_archive_erigon:
+  certbot_webroot:
