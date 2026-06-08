@@ -1,6 +1,6 @@
 """Ethereum chain metrics — JSON-RPC probes, beacon API probes, and native scrape.
 
-Shared across all three ETH tiers (latest / archive-reth / archive-erigon).
+Shared across all three ETH tiers (minimal / archive / proof).
 The EL client is identified via the EL_CLIENT env var (reth | erigon).
 Customer-facing metric names mirror the tao set (blockmachine_node_*) so
 dashboards work across chains.
@@ -24,7 +24,7 @@ _cached_client_version = None
 
 
 def add_eth_mode_metrics(metrics):
-    tier = os.getenv("ETH_TIER", "latest")
+    tier = os.getenv("ETH_TIER", "minimal")
     el_client = os.getenv("EL_CLIENT", "reth")
     metrics.add(
         "blockmachine_node_mode_info",

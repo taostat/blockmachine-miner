@@ -29,9 +29,9 @@ services:
       timeout: 10s
       retries: 3
 
-  # Bootstraps the reth datadir from Paradigm's official archive snapshot on
-  # first run. --archive pulls the archive component set, matching the node
-  # service's default (non-pruned) mode. A bootstrap marker keeps this
+  # Bootstraps the reth datadir from Paradigm's official snapshot on first run.
+  # --non-interactive defaults to the minimal component set in reth v2.x,
+  # which matches --minimal on the node service. A bootstrap marker keeps this
   # idempotent across restarts.
   snapshot-init:
     image: ghcr.io/paradigmxyz/reth:v2.2.0
@@ -44,10 +44,10 @@ services:
           echo "snapshot already initialized"
           exit 0
         fi
-        reth download --datadir /data --chain mainnet --archive --non-interactive
+        reth download --datadir /data --chain mainnet --non-interactive
         touch "$$MARKER"
     volumes:
-      - eth_data_archive_reth:/data
+      - eth_data_latest:/data
     restart: "no"
 
   # Generates the Engine API JWT once on first run. Reuses the reth image so
@@ -87,6 +87,7 @@ services:
       - node
       - --chain=mainnet
       - --datadir=/data
+      - --minimal
       - --http
       - --http.addr=0.0.0.0
       - --http.port=8545
@@ -107,7 +108,7 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
-      - eth_data_archive_reth:/data
+      - eth_data_latest:/data
       - eth_jwt:/jwt:ro
     restart: unless-stopped
 
@@ -147,12 +148,12 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - eth_data_archive_reth:/node-data:ro
+      - eth_data_latest:/node-data:ro
       - /proc:/host/proc:ro
     environment:
       CHAIN: eth
       EL_CLIENT: reth
-      ETH_TIER: archive-reth
+      ETH_TIER: minimal
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
@@ -171,7 +172,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  eth_data_archive_reth:
+  eth_data_latest:
   eth_jwt:
   lighthouse_data:
   certbot_webroot:

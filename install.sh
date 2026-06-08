@@ -10,7 +10,7 @@ INSTALL_DIR="${BM_MINER_DIR:-/root/blockmachine-miner}"
 MIN_COMPOSE_MAJOR=2
 MIN_COMPOSE_MINOR=21
 MIN_RAM_MB=15000
-MIN_RAM_MB_ETH_LATEST=15000
+MIN_RAM_MB_ETH_MINIMAL=15000
 MIN_RAM_MB_ETH_ARCHIVE=30000
 
 # --- Helpers ---
@@ -244,7 +244,7 @@ EOF
     # Erigon serves HTTP and WS on the same port; reth uses 8545/8546 split.
     local el_client="reth"
     local ws_port=8546
-    if [ "$tier" = "archive-erigon" ]; then
+    if [ "$tier" = "proof" ]; then
       el_client="erigon"
       ws_port=8545
     fi
@@ -359,9 +359,9 @@ extract_hex_field() {
 
 wait_for_sync_eth() {
   info "Waiting for node to sync..."
-  echo "    Latest tier (reth --minimal):  ~1-2h from snapshot."
-  echo "    Archive Reth (reth default):   ~24-48h from a snapshot."
-  echo "    Archive Erigon (erigon):       a day or more (built-in torrent fetch)."
+  echo "    minimal tier (reth --minimal): ~1-2h from snapshot."
+  echo "    archive tier (reth default):   ~24-48h from a snapshot."
+  echo "    proof tier   (erigon):         a day or more (built-in torrent fetch)."
   echo "    (Ctrl+C to skip — sync continues in the background)"
   echo ""
 
@@ -519,48 +519,49 @@ main() {
 
   # Node tier (chain-specific terminology).
   archive=false
-  eth_tier="latest"
+  eth_tier="minimal"
   if [ "$chain" = "eth" ]; then
     echo ""
     echo "Ethereum tier:"
-    echo "  latest         - general-purpose RPC, recent state only — earns from eth_* at tip"
-    echo "  archive-reth   - general-purpose RPC, full archive — earns from trace_*, debug_*, eth_* at any depth (including eth_getLogs at depth)"
-    echo "  archive-erigon - proof specialist — earns from eth_getProof at any depth; responses differ from Reth's audit reference, so this tier is restricted to proof traffic only"
-    eth_tier=$(prompt_value "Tier" "latest")
+    echo "  minimal - general-purpose RPC, recent state only (reth --minimal) — earns from eth_* at tip"
+    echo "  archive - general-purpose RPC, full archive (reth default) — earns from trace_*, debug_*, eth_* at any depth (including eth_getLogs at depth)"
+    echo "  proof   - eth_getProof only (erigon, ~500 GB disk); not recommended — Blockmachine runs an in-house Erigon as a backstop because external proof supply is not expected to be profitable. See README before choosing this tier."
+    eth_tier=$(prompt_value "Tier" "minimal")
     eth_tier="${eth_tier,,}"
     case "$eth_tier" in
-      latest)
-        check_tier_resources "$MIN_RAM_MB_ETH_LATEST" "ETH Latest tier"
-        check_tier_disk 400 "ETH Latest tier"
+      minimal)
+        check_tier_resources "$MIN_RAM_MB_ETH_MINIMAL" "ETH minimal tier"
+        check_tier_disk 400 "ETH minimal tier"
         ;;
-      archive-reth)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Reth tier"
-        check_tier_disk 3000 "ETH Archive Reth tier"
+      archive)
+        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH archive tier"
+        check_tier_disk 3000 "ETH archive tier"
         echo ""
-        echo "  Archive Reth uses reth in default (non-pruned) mode and requires"
+        echo "  Archive uses reth in default (non-pruned) mode and requires"
         echo "  ~3 TB of fast SSD/NVMe. The compose file bootstraps the datadir"
         echo "  from Paradigm's archive snapshot, reaching live tip in ~1-2h."
         echo "  Earns from the bulk of customer ETH RPC: trace_*, debug_*, and"
         echo "  eth_* (including eth_getLogs) against any historical block."
-        echo "  eth_getProof traffic routes to Archive Erigon backends."
+        echo "  eth_getProof traffic routes to proof-tier backends."
         ;;
-      archive-erigon)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH Archive Erigon tier"
-        check_tier_disk 700 "ETH Archive Erigon tier"
+      proof)
+        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH proof tier"
+        check_tier_disk 700 "ETH proof tier"
         echo ""
-        echo "  Archive Erigon uses erigon with state/history pruned beyond the"
-        echo "  last ~10,064 blocks (~33h) — disk footprint ~500 GB. Initial sync"
+        echo "  Proof uses erigon with state/history pruned beyond the last"
+        echo "  ~10,064 blocks (~33h) — disk footprint ~500 GB. Initial sync"
         echo "  from torrents/peers takes a day or more."
         echo ""
-        echo "  This is the proof-specialist tier. Erigon's responses differ from"
-        echo "  Reth's audit reference, so the network restricts Erigon backends"
-        echo "  to eth_getProof traffic only — all other ETH methods route to"
-        echo "  Reth backends. A narrow, high-value slice of total ETH volume."
-        echo "  If you're choosing a client for general ETH RPC mining, Reth is"
-        echo "  recommended. You can continue with Erigon — proceeding now."
+        echo "  Proof-tier backends serve eth_getProof only — Erigon's responses"
+        echo "  differ from Reth's audit reference so the network restricts this"
+        echo "  tier to proof traffic. eth_getProof is a small share of total ETH"
+        echo "  traffic and Blockmachine runs an in-house Erigon as a backstop,"
+        echo "  so external proof-tier operators should not expect material"
+        echo "  earnings. If you're choosing a client for general ETH RPC mining,"
+        echo "  pick Reth and the minimal or archive tier."
         ;;
       *)
-        error "Unknown tier '${eth_tier}'. Choose 'latest', 'archive-reth', or 'archive-erigon'."
+        error "Unknown tier '${eth_tier}'. Choose 'minimal', 'archive', or 'proof'."
         ;;
     esac
   else
@@ -645,9 +646,9 @@ main() {
   if [ -d "${INSTALL_DIR}" ]; then
     info "Stopping any existing services for re-install..."
     for f in docker-compose.yml \
-             docker-compose.eth.yml \
-             docker-compose.eth-archive-reth.yml \
-             docker-compose.eth-archive.yml; do
+             docker-compose.eth-minimal.yml \
+             docker-compose.eth-archive.yml \
+             docker-compose.eth-proof.yml; do
       if [ -f "${INSTALL_DIR}/${f}" ]; then
         docker compose -f "${INSTALL_DIR}/${f}" down --remove-orphans 2>/dev/null || true
       fi
@@ -666,13 +667,13 @@ main() {
   if [ "$chain" = "eth" ]; then
     check_port "$p2p_port" udp
     case "$eth_tier" in
-      latest|archive-reth)
+      minimal|archive)
         # Both reth tiers run an external Lighthouse beacon node alongside.
         check_port 9000 tcp
         check_port 9000 udp
         check_port 9001 udp
         ;;
-      archive-erigon)
+      proof)
         check_port 4000 tcp
         check_port 4000 udp
         ;;
@@ -686,12 +687,12 @@ main() {
     ufw allow 443/tcp
     ufw allow "${p2p_port}/tcp"
     ufw allow "${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
+    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "minimal" ] || [ "$eth_tier" = "archive" ]; }; then
       # Lighthouse beacon P2P (TCP+UDP on 9000, QUIC discovery UDP on 9001).
       ufw allow 9000/tcp
       ufw allow 9000/udp
       ufw allow 9001/udp
-    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ]; then
+    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "proof" ]; then
       # Caplin (erigon built-in CL) beacon P2P on port 4000.
       ufw allow 4000/tcp
       ufw allow 4000/udp
@@ -788,19 +789,19 @@ main() {
   fi
 
   # Start services. Compose file selection:
-  #   tao + lite            → docker-compose.yml
-  #   tao + archive         → docker-compose.yml + docker-compose.archive.yml
-  #   eth + latest          → docker-compose.eth.yml
-  #   eth + archive-reth    → docker-compose.eth-archive-reth.yml
-  #   eth + archive-erigon  → docker-compose.eth-archive.yml
-  #   + tls (any)           → adds docker-compose.tls.yml
+  #   tao + lite      → docker-compose.yml
+  #   tao + archive   → docker-compose.yml + docker-compose.archive.yml
+  #   eth + minimal   → docker-compose.eth-minimal.yml
+  #   eth + archive   → docker-compose.eth-archive.yml
+  #   eth + proof     → docker-compose.eth-proof.yml
+  #   + tls (any)     → adds docker-compose.tls.yml
   echo ""
   info "Starting services..."
   if [ "$chain" = "eth" ]; then
     case "$eth_tier" in
-      archive-reth)   compose_cmd="docker compose -f docker-compose.eth-archive-reth.yml" ;;
-      archive-erigon) compose_cmd="docker compose -f docker-compose.eth-archive.yml" ;;
-      *)              compose_cmd="docker compose -f docker-compose.eth.yml" ;;
+      archive) compose_cmd="docker compose -f docker-compose.eth-archive.yml" ;;
+      proof)   compose_cmd="docker compose -f docker-compose.eth-proof.yml" ;;
+      *)       compose_cmd="docker compose -f docker-compose.eth-minimal.yml" ;;
     esac
   else
     compose_cmd="docker compose -f docker-compose.yml"
@@ -852,10 +853,10 @@ main() {
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
     local extra_ports="${p2p_port}/tcp"
     [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "latest" ] || [ "$eth_tier" = "archive-reth" ]; }; then
+    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "minimal" ] || [ "$eth_tier" = "archive" ]; }; then
       extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
     fi
-    [ "$chain" = "eth" ] && [ "$eth_tier" = "archive-erigon" ] && \
+    [ "$chain" = "eth" ] && [ "$eth_tier" = "proof" ] && \
       extra_ports="${extra_ports} 4000/tcp 4000/udp"
 
     echo "Firewall:"
