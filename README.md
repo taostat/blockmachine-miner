@@ -30,7 +30,9 @@ Customer → Gateway → Your Node
 3. Validators read gateway logs, verify correctness, and submit weights on-chain each epoch (~72 minutes)
 4. You earn emissions proportional to the CUs you served at your bid price
 
-## Supported chains and accepted clients
+## Prerequisites
+
+### Supported chains and accepted clients
 
 | chain | chain ID | accepted clients | tiers |
 |-------|----------|------------------|-------|
@@ -49,9 +51,12 @@ Customer → Gateway → Your Node
 
 Nodes are re-checked continuously, not only at registration. Capability is determined by what your node actually answers, so there is nothing to declare beyond pointing us at the endpoint.
 
-## Prerequisites
+Hardware guidance below covers `tao` and `eth`, the two chains this repo ships
+compose files for. For the other chains, follow your client's own hardware
+guidance for the tier you intend to run — an archive node needs archive-sized
+storage whichever chain it is on.
 
-### Subtensor (chain: `tao`)
+### Hardware: Subtensor (`tao`)
 
 | Resource | Lite | Archive |
 |----------|------|---------|
@@ -62,7 +67,7 @@ Nodes are re-checked continuously, not only at registration. Capability is deter
 | Sync time | ~15 min (warp sync) | Days (or use snapshot) |
 | Ports | 80, 443, 30333 | 80, 443, 30333 |
 
-### Ethereum (chain: `eth`, mainnet only)
+### Hardware: Ethereum (`eth`, mainnet only)
 
 | Resource | Minimal (reth `--minimal`) | Archive (reth default) | Proof (erigon) |
 |----------|---------------------------|-----------------------------|-------------------------|
