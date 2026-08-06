@@ -30,6 +30,25 @@ Customer → Gateway → Your Node
 3. Validators read gateway logs, verify correctness, and submit weights on-chain each epoch (~72 minutes)
 4. You earn emissions proportional to the CUs you served at your bid price
 
+## Supported chains and accepted clients
+
+| chain | chain ID | accepted clients | tiers |
+|-------|----------|------------------|-------|
+| `tao` | — | any Subtensor node | lite, archive |
+| `eth` | 1 | reth, erigon | minimal, archive, proof |
+| `bsc` | 56 | geth, reth | lite, archive |
+| `base` | 8453 | geth, reth (op-geth / op-reth) | lite, archive |
+| `polygon` | 137 | bor, erigon, geth | lite, archive |
+| `optimism` | 10 | geth, reth (op-geth / op-reth) | lite, archive |
+| `arbitrum` | 42161 | nitro, geth | lite, archive |
+
+### What we expect of the node itself
+
+- Complete and correct responses across the chain's history for the tier you claim.
+- **Archive** means genuine historical state, not a recent-window node. Lite and full nodes are welcome and serve non-archive traffic, but only archive nodes are eligible for the archive base incentive.
+
+Nodes are re-checked continuously, not only at registration. Capability is determined by what your node actually answers, so there is nothing to declare beyond pointing us at the endpoint.
+
 ## Prerequisites
 
 ### Subtensor (chain: `tao`)
