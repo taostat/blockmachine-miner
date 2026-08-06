@@ -1,18 +1,5 @@
 # Blockmachine Miner
 
-Run a blockchain RPC node behind an authenticated gateway and earn by serving RPC requests through the Blockmachine network (Bittensor Subnet 19).
-
-Supported chains:
-
-| Chain | Tiers | Client |
-|-------|-------|--------|
-| `tao` (Bittensor subtensor) | `lite`, `archive` | subtensor |
-| `eth` (Ethereum mainnet) | `minimal`, `archive`, `proof` | reth (`minimal`, `archive`), erigon (`proof`) |
-
-The install script picks the right stack based on your choice of chain and tier — see [Getting started](#getting-started) below.
-
-Blockmachine is a decentralized marketplace for blockchain RPC infrastructure. Miners compete on price and quality to serve customer requests routed by the protocol gateway. You set your own price per Compute Unit (CU) and earn emissions proportional to the work you deliver.
-
 ## How it works
 
 ```
