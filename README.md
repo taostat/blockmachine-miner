@@ -77,7 +77,7 @@ A node declared **full** must serve the chain head and the recent range correctl
 |---|---|---|---|---|
 | **Ethereum** (`eth`, chain-id 1) | **reth** — run this. (erigon is also accepted, but only because we operate one erigon node ourselves for proof-based verification; miners should run reth.) | ✅ | ✅ | ❌ |
 | **BSC** (`bsc`, 56) | geth (bsc-geth), reth (reth-bsc) | ✅ | ✅ | ✅ |
-| **Base** (`base`, 8453) | reth | ✅ | ✅ | ✅ |
+| **Base** (`base`, 8453) | reth | ❌ | ✅ | ✅ |
 | **Optimism** (`optimism`, 10) | reth (op-reth) | ✅ | ✅ | ✅ |
 | **Polygon** (`polygon`, 137) | bor | ✅ | ✅ | ✅ |
 | **Avalanche C-Chain** (`avalanche`, 43114) | coreth / avalanchego (see U7 exception) | ❌ | ✅ | ✅ |
@@ -86,6 +86,8 @@ A node declared **full** must serve the chain head and the recent range correctl
 | **Arbitrum One** (`arbitrum`, 42161) | nitro (a geth fork — either name is accepted in the version string) | ❌ | ✅ | ✅ |
 | **Robinhood Chain** (`robinhood`, 4663) | nitro (as above) | ❌ | ✅ | ✅ |
 | **TAO (Bittensor)** (`tao`) | subtensor | ✅ | ❌ | ✅ |
+
+**Why Base has no mempool requirement.** Base's sequencer is private: public nodes cannot observe a meaningful pending-transaction feed, so there is nothing a node could serve and nothing we could fairly measure. Mempool is therefore not required on Base (same as the other chains marked ❌).
 
 **Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
 `state_getReadProof` on substrate) return answers that can be verified mathematically against
