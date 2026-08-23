@@ -123,26 +123,3 @@ setup() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"nonexistent_cmd_xyz is required"* ]]
 }
-
-# --- check_snapshot_disk_space ---
-
-@test "check_snapshot_disk_space returns 0 when content-length unavailable" {
-  # Override curl to return no content-length
-  curl() { echo "HTTP/1.1 200 OK"; }
-  export -f curl
-
-  run check_snapshot_disk_space "http://fake-url/snapshot.tar.zst"
-  [ "$status" -eq 0 ]
-}
-
-@test "check_snapshot_disk_space returns 0 when enough space" {
-  # 1 GB snapshot, disk check should pass on any dev machine
-  curl() {
-    echo "HTTP/1.1 200 OK"
-    echo "Content-Length: 1073741824"
-  }
-  export -f curl
-
-  run check_snapshot_disk_space "http://fake-url/snapshot.tar.zst"
-  [ "$status" -eq 0 ]
-}

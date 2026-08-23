@@ -3,23 +3,26 @@ services:
     image: nginx:1.31.0-alpine
     volumes:
       - ./ssl:/etc/nginx/ssl:ro
-      - ./gateway/miner-gateway.tao.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
+      - ./gateway/miner-gateway.${GATEWAY_TEMPLATE:-tao}.conf.template:/etc/nginx/conf.d/miner-gateway.conf.template:ro
       - ./gateway/entrypoint.sh:/docker-entrypoint.d/90-blockmachine.sh:ro
       - certbot_webroot:/var/www/certbot:ro
     environment:
       SECRET_V1: ${SECRET_V1}
       SECRET_V2: ${SECRET_V2:-}
-      BACKEND_HOST: node
+      BACKEND_HOST: ${BACKEND_HOST:-host.docker.internal}
       BACKEND_PORT: ${BACKEND_PORT:-9944}
+      BACKEND_HTTP_PORT: ${BACKEND_HTTP_PORT:-8545}
+      BACKEND_WS_PORT: ${BACKEND_WS_PORT:-8546}
       METRICS_HOST: metrics
       METRICS_PORT: ${METRICS_PORT:-9100}
       SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
       SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "443:443"
       - "80:80"
     depends_on:
-      - node
       - metrics
     restart: unless-stopped
     healthcheck:
@@ -35,68 +38,23 @@ services:
       - ./metrics:/app:ro
       - ./.git:/repo/.git:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - node_data:/node-data:ro
       - /proc:/host/proc:ro
     environment:
-      CHAIN: tao
+      CHAIN: ${CHAIN:-tao}
       METRICS_PORT: ${METRICS_PORT:-9100}
       METRICS_SECRET_V1: ${SECRET_V1}
       METRICS_SECRET_V2: ${SECRET_V2:-}
-      NODE_RPC_URL: http://node:${BACKEND_PORT:-9944}
-      NODE_NATIVE_METRICS_URL: http://node:9615/metrics
+      NODE_RPC_URL: http://${BACKEND_HOST:-host.docker.internal}:${BACKEND_PORT:-9944}
+      NODE_NATIVE_METRICS_URL: ${NODE_NATIVE_METRICS_URL:-}
       GATEWAY_HEALTH_URL: http://gateway/health
-      NODE_MODE: lite
-      NODE_SYNC: warp
-      NODE_DATABASE: paritydb
-      NODE_DATA_PATH: /node-data
       HOST_PROC_PATH: /host/proc
       GIT_DIR: /repo/.git
       SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
       BM_MINER_GIT_SHA: ${BM_MINER_GIT_SHA:-unknown}
       BM_MINER_GIT_BRANCH: ${BM_MINER_GIT_BRANCH:-unknown}
-    depends_on:
-      - node
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
-
-  node:
-    image: ghcr.io/opentensor/subtensor:v3.2.9-326
-    command:
-      - --base-path
-      - /tmp/blockchain
-      - --chain
-      - chainspecs/raw_spec_finney.json
-      - --bootnodes
-      - /dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
-      - --sync
-      - warp
-      - --no-mdns
-      - --rpc-external
-      - --rpc-cors
-      - all
-      - --unsafe-rpc-external
-      - --rpc-max-connections
-      - "10000"
-      - --in-peers
-      - "500"
-      - --out-peers
-      - "500"
-      - --database
-      - paritydb
-      - --prometheus-external
-      - --prometheus-port
-      - "9615"
-    ports:
-      - "30333:30333"
-    volumes:
-      - node_data:/tmp/blockchain
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"system_health\",\"params\":[],\"id\":1}' http://localhost:9944 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
 
 volumes:
-  node_data:
   certbot_webroot:

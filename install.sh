@@ -2,16 +2,15 @@
 set -euo pipefail
 
 # Blockmachine Miner Setup
-# Sets up the gateway + a chain node (subtensor or ethereum) on this server.
-# No Python or CLI required — just Docker.
+# Sets up the gateway that fronts YOUR chain node on this server.
+# You bring the node: provisioning, syncing and disk are your responsibility.
+# No Python or CLI required here — just Docker.
 
 REPO_URL="https://github.com/taostat/blockmachine-miner.git"
 INSTALL_DIR="${BM_MINER_DIR:-/root/blockmachine-miner}"
 MIN_COMPOSE_MAJOR=2
 MIN_COMPOSE_MINOR=21
-MIN_RAM_MB=15000
-MIN_RAM_MB_ETH_MINIMAL=15000
-MIN_RAM_MB_ETH_ARCHIVE=30000
+MIN_RAM_MB=2000
 
 # --- Helpers ---
 
@@ -23,12 +22,14 @@ check_command() {
   command -v "$1" >/dev/null || error "$1 is required but not found. $2"
 }
 
+
 install_docker() {
   info "Installing Docker..."
   curl -fsSL https://get.docker.com | sh
   systemctl enable --now docker >/dev/null 2>&1
   info "Docker installed"
 }
+
 
 install_git() {
   info "Installing git..."
@@ -44,6 +45,7 @@ install_git() {
   info "Git installed"
 }
 
+
 clone_or_update_repo() {
   if [ -d "${INSTALL_DIR}/.git" ]; then
     info "Updating existing installation..."
@@ -55,6 +57,7 @@ clone_or_update_repo() {
   cd "$INSTALL_DIR" || error "Could not enter ${INSTALL_DIR}"
 }
 
+
 check_port() {
   local port="$1" proto="${2:-tcp}"
   local flags="-tlnp"
@@ -64,6 +67,7 @@ check_port() {
     error "${proto^^} port ${port} is already in use. Stop the process and try again."
   fi
 }
+
 
 check_system() {
   local ram_mb
@@ -89,30 +93,6 @@ check_system() {
   fi
 }
 
-# Warn (but don't error) when the chosen tier wants more RAM than the host has.
-check_tier_resources() {
-  local recommended_mb="$1" tier_label="$2"
-  local ram_mb
-  ram_mb=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo "0")
-  if [ "$ram_mb" -gt 0 ] && [ "$ram_mb" -lt "$recommended_mb" ]; then
-    warn "${tier_label} recommends ${recommended_mb}MB RAM; this host has ${ram_mb}MB. Sync may be slow or unstable."
-  fi
-}
-
-# Warn if disk free at INSTALL_DIR is below the rough required size for a tier.
-# Catches obvious provisioning errors before a multi-day sync starts on a too-small disk.
-check_tier_disk() {
-  local required_gb="$1" tier_label="$2"
-  local check_dir="${INSTALL_DIR}"
-  [ -d "$check_dir" ] || check_dir="$(dirname "$check_dir")"
-  local available_kb
-  available_kb=$(df -k "$check_dir" 2>/dev/null | tail -1 | awk '{print $4}')
-  [ -n "$available_kb" ] || return 0
-  local available_gb=$(( available_kb / 1024 / 1024 ))
-  if [ "$available_gb" -lt "$required_gb" ]; then
-    warn "${tier_label} expects ~${required_gb} GB free at ${check_dir}; only ${available_gb} GB available. Sync will fail or stall."
-  fi
-}
 
 check_compose_version() {
   local version
@@ -130,6 +110,7 @@ check_compose_version() {
   fi
 }
 
+
 get_public_ip() {
   local url ip
   for url in https://ifconfig.me https://api.ipify.org https://icanhazip.com; do
@@ -141,13 +122,16 @@ get_public_ip() {
   error "Could not determine public IP."
 }
 
+
 is_ipv4() {
   echo "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
 }
 
+
 is_ip() {
   is_ipv4 "$1" || echo "$1" | grep -q ':'
 }
+
 
 generate_self_signed_cert() {
   local cn="$1" ssl_dir="$2"
@@ -172,6 +156,7 @@ generate_self_signed_cert() {
     -subj "/CN=${cn}"
 }
 
+
 prompt_yn() {
   local prompt="$1" default="${2:-n}" answer
   if [ "$default" = "y" ]; then
@@ -187,79 +172,13 @@ prompt_yn() {
   esac
 }
 
+
 prompt_value() {
   local prompt="$1" default="$2" value
   read -rp "$prompt [$default] " value
   echo "${value:-$default}"
 }
 
-check_snapshot_disk_space() {
-  local url="$1"
-  local snapshot_bytes
-  snapshot_bytes=$(curl -sI -L "$url" 2>/dev/null \
-    | grep -i '^content-length:' | tail -1 \
-    | tr -dc '0-9')
-  [ -n "$snapshot_bytes" ] && [ "$snapshot_bytes" -gt 0 ] || return 0
-
-  local required_bytes=$(( snapshot_bytes * 5 / 2 ))
-  local check_dir="${INSTALL_DIR:-.}"
-  if [ ! -d "$check_dir" ]; then
-    check_dir="$(dirname "$check_dir")"
-  fi
-  local available_kb
-  available_kb=$(df -k "$check_dir" 2>/dev/null | tail -1 | awk '{print $4}')
-  [ -n "$available_kb" ] || return 0
-
-  local available_bytes=$(( available_kb * 1024 ))
-  [ "$available_bytes" -lt "$required_bytes" ] || return 0
-
-  local required_gb=$(( required_bytes / 1073741824 ))
-  local available_gb=$(( available_bytes / 1073741824 ))
-  warn "Disk space may be insufficient for snapshot restore."
-  echo "    Available: ${available_gb} GB"
-  echo "    Required:  ~${required_gb} GB (2.5x snapshot for RocksDB extraction)"
-  if ! prompt_yn "Continue anyway?"; then
-    error "Aborting. Free up disk space and re-run."
-  fi
-}
-
-write_env() {
-  local env_file="$1" secret="$2" domain="${3:-}" chain_id="${4:-tao}" tier="${5:-}"
-  local git_sha git_branch
-  git_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-  git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-
-  cat > "$env_file" <<EOF
-SECRET_V1=${secret}
-SECRET_V2=
-DOMAIN=${domain}
-CHAIN=${chain_id}
-SSL_CERT_PATH=/etc/nginx/ssl/cert.pem
-SSL_KEY_PATH=/etc/nginx/ssl/key.pem
-BM_MINER_GIT_SHA=${git_sha}
-BM_MINER_GIT_BRANCH=${git_branch}
-EOF
-
-  if [ "$chain_id" = "eth" ]; then
-    # Erigon serves HTTP and WS on the same port; reth uses 8545/8546 split.
-    local el_client="reth"
-    local ws_port=8546
-    if [ "$tier" = "proof" ]; then
-      el_client="erigon"
-      ws_port=8545
-    fi
-    cat >> "$env_file" <<EOF
-ETH_TIER=${tier}
-EL_CLIENT=${el_client}
-BACKEND_HTTP_PORT=8545
-BACKEND_WS_PORT=${ws_port}
-EOF
-  else
-    echo "BACKEND_PORT=9944" >> "$env_file"
-  fi
-
-  chmod 600 "$env_file"
-}
 
 wait_for_health() {
   local retries=60 i
@@ -276,163 +195,50 @@ wait_for_health() {
   return 1
 }
 
-rpc_call() {
-  curl -sk --max-time 5 \
-    -X POST -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer ${secret}" \
-    -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":[],\"id\":1}" \
-    https://localhost:443 2>/dev/null
-}
+write_env() {
+  local env_file="$1" secret="$2" domain="${3:-}" chain_id="${4:-tao}"
+  : "${gateway_template:=tao}"
+  : "${backend_host:=host.docker.internal}"
+  : "${backend_port:=9944}"
+  : "${backend_http_port:=8545}"
+  : "${backend_ws_port:=8546}"
+  local git_sha git_branch
+  git_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
-# Convert an "0x..." hex string from JSON-RPC to a decimal integer. Empty/0 on failure.
-hex_to_dec() {
-  local hex="$1"
-  hex="${hex#0x}"
-  [ -n "$hex" ] && [ "$hex" != "null" ] || { echo 0; return; }
-  printf '%d' "0x${hex}" 2>/dev/null || echo 0
-}
+  cat > "$env_file" <<EOF
+SECRET_V1=${secret}
+SECRET_V2=
+DOMAIN=${domain}
+CHAIN=${chain_id}
+GATEWAY_TEMPLATE=${gateway_template}
+BACKEND_HOST=${backend_host}
+SSL_CERT_PATH=/etc/nginx/ssl/cert.pem
+SSL_KEY_PATH=/etc/nginx/ssl/key.pem
+BM_MINER_GIT_SHA=${git_sha}
+BM_MINER_GIT_BRANCH=${git_branch}
+EOF
 
-wait_for_sync_tao() {
-  info "Waiting for node to sync (lite nodes warp-sync in ~15 minutes)..."
-  echo "    (Ctrl+C to skip — the node will continue syncing in the background)"
-  echo ""
-
-  local dots=0
-  while true; do
-    local health_result sync_result
-    health_result=$(rpc_call "system_health") || { sleep 10; continue; }
-    sync_result=$(rpc_call "system_syncState") || { sleep 10; continue; }
-
-    local peers syncing current highest
-    peers=$(echo "$health_result" | grep -o '"peers":[0-9]*' | grep -o '[0-9]*')
-    syncing=$(echo "$health_result" | grep -o '"isSyncing":[a-z]*' | cut -d: -f2)
-    current=$(echo "$sync_result" | grep -o '"currentBlock":[0-9]*' | grep -o '[0-9]*')
-    highest=$(echo "$sync_result" | grep -o '"highestBlock":[0-9]*' | grep -o '[0-9]*')
-    peers="${peers:-0}"
-
-    if [ -z "$current" ] || [ -z "$highest" ] || [ "$highest" -eq 0 ]; then
-      printf "\r    Connecting to peers...                                          "
-      sleep 10
-      continue
-    fi
-
-    local remaining=$(( highest - current ))
-
-    if [ "$remaining" -le 5 ] && [ "$syncing" = "false" ]; then
-      printf "\r    Block %s — synced! (%s peers)                                  \n" \
-        "$current" "$peers"
-      return 0
-    fi
-
-    if [ "$current" -le 1 ]; then
-      dots=$(( (dots + 1) % 4 ))
-      local indicator=""
-      case $dots in
-        0) indicator="   " ;;
-        1) indicator=".  " ;;
-        2) indicator=".. " ;;
-        3) indicator="..." ;;
-      esac
-      printf "\r    Warp syncing%s (%s peers, target block %s)          " \
-        "$indicator" "$peers" "$highest"
-    elif [ "$syncing" = "true" ]; then
-      local pct=$(( current * 100 / highest ))
-      printf "\r    Syncing blocks %s / %s (%d%%) — %s peers            " \
-        "$current" "$highest" "$pct" "$peers"
-    else
-      local pct=$(( current * 100 / highest ))
-      printf "\r    Block %s / %s (%d%%) — %s peers                    " \
-        "$current" "$highest" "$pct" "$peers"
-    fi
-
-    sleep 10
-  done
-}
-
-# Ethereum sync waiter. Polls eth_blockNumber + eth_syncing + net_peerCount.
-# eth_syncing returns `false` when fully synced, else an object with progress.
-# Extract the hex value of a named JSON-RPC result field.
-# Examples: extract_hex_field "$json" result, extract_hex_field "$json" highestBlock
-extract_hex_field() {
-  echo "$1" | grep -o "\"$2\":\"0x[0-9a-fA-F]*\"" | grep -o '0x[0-9a-fA-F]*' | head -1
-}
-
-wait_for_sync_eth() {
-  info "Waiting for node to sync..."
-  echo "    minimal tier (reth --minimal): ~1-2h from snapshot."
-  echo "    archive tier (reth default):   ~24-48h from a snapshot."
-  echo "    proof tier   (erigon):         a day or more (built-in torrent fetch)."
-  echo "    (Ctrl+C to skip — sync continues in the background)"
-  echo ""
-
-  while true; do
-    local sync_result peer_result
-    sync_result=$(rpc_call "eth_syncing") || { sleep 10; continue; }
-    peer_result=$(rpc_call "net_peerCount") || { sleep 10; continue; }
-
-    local peer_hex peers
-    peer_hex=$(extract_hex_field "$peer_result" result)
-    peers=$(hex_to_dec "${peer_hex:-0x0}")
-
-    # eth_syncing returns `false` when fully synced (need eth_blockNumber to
-    # display the tip), else an object with currentBlock/highestBlock.
-    if echo "$sync_result" | grep -q '"result":false'; then
-      local block_result block_hex current_block
-      block_result=$(rpc_call "eth_blockNumber") || { sleep 10; continue; }
-      block_hex=$(extract_hex_field "$block_result" result)
-      current_block=$(hex_to_dec "${block_hex:-0x0}")
-      if [ "$current_block" -gt 0 ]; then
-        printf "\r    Block %s — synced! (%s peers)                                  \n" \
-          "$current_block" "$peers"
-        return 0
-      fi
-      printf "\r    Connecting to peers (%s connected)...                            " "$peers"
-      sleep 10
-      continue
-    fi
-
-    local current_hex highest_hex current_block highest
-    current_hex=$(extract_hex_field "$sync_result" currentBlock)
-    highest_hex=$(extract_hex_field "$sync_result" highestBlock)
-    current_block=$(hex_to_dec "${current_hex:-0x0}")
-    highest=$(hex_to_dec "${highest_hex:-0x0}")
-
-    if [ "$highest" -gt 0 ] && [ "$current_block" -gt 0 ]; then
-      local pct=$(( current_block * 100 / highest ))
-      printf "\r    Syncing blocks %s / %s (%d%%) — %s peers            " \
-        "$current_block" "$highest" "$pct" "$peers"
-    else
-      printf "\r    Discovering peers (%s connected, target unknown)...               " "$peers"
-    fi
-
-    sleep 10
-  done
-}
-
-wait_for_sync() {
-  if [ "${chain:-tao}" = "eth" ]; then
-    wait_for_sync_eth
+  if [ "$gateway_template" = "eth" ]; then
+    cat >> "$env_file" <<EOF
+BACKEND_HTTP_PORT=${backend_http_port}
+BACKEND_WS_PORT=${backend_ws_port}
+EOF
   else
-    wait_for_sync_tao
+    echo "BACKEND_PORT=${backend_port}" >> "$env_file"
   fi
+
+  chmod 600 "$env_file"
 }
 
-# shellcheck disable=SC2154
 print_registration() {
-  local tier_label
-  if [ "$chain" = "eth" ]; then
-    tier_label="$eth_tier"
-  else
-    tier_label="$([ "$archive" = true ] && echo "archive" || echo "lite")"
-  fi
-
   echo ""
   echo "========================================"
   echo " Registration Details"
   echo "========================================"
   echo ""
   echo "  Endpoint: ${endpoint}"
-  echo "  Chain:    ${chain} (${tier_label})"
+  echo "  Chain:    ${chain}"
   echo "  Alias:    ${alias}"
   echo "  Secret:   ${secret}"
   if [ "$use_certbot" = true ]; then
@@ -453,8 +259,12 @@ print_registration() {
 
 main() {
   echo ""
-  echo "Blockmachine Miner Setup"
-  echo "========================"
+  echo "Blockmachine Gateway Setup"
+  echo "=========================="
+  echo ""
+  echo "This installs the gateway that fronts your node. You bring the node:"
+  echo "provisioning, syncing and disk sizing are your responsibility, and your"
+  echo "node must meet the eligibility requirements for its chain and type."
   echo ""
 
   # Quick sanity checks (no installs yet)
@@ -464,19 +274,17 @@ main() {
 
   # ── Interactive: gather all user input ────────────────────────────
 
-  # Chain
+  # Chain — the canonical lower-case chain code.
   echo ""
-  echo "Which blockchain will this miner serve?"
-  echo "  tao - Bittensor subtensor (default)"
-  echo "  eth - Ethereum mainnet (reth Latest, reth Archive, or erigon Archive)"
-  chain=$(prompt_value "Chain" "tao")
+  chain=$(prompt_value "Chain code (e.g. tao, eth, bsc, base, ...)" "tao")
   chain="${chain,,}"
-  case "$chain" in
-    tao|eth) ;;
-    *) error "Unknown chain '${chain}'. Choose 'tao' or 'eth'." ;;
-  esac
 
-  # Network — testnet only applies to tao for now; eth is mainnet-only.
+  # Gateway template: substrate speaks WS on one port; EVM chains split
+  # HTTP and WS across two.
+  gateway_template="eth"
+  [ "$chain" = "tao" ] && gateway_template="tao"
+
+  # Network — testnet only applies to tao for now.
   network="mainnet"
   if [ "$chain" = "tao" ]; then
     if prompt_yn "Use testnet?"; then
@@ -489,12 +297,27 @@ main() {
     bm_prefix="bm --testnet"
   fi
 
-  # TLS / endpoint. Default URL scheme depends on chain — substrate uses WS for
-  # JSON-RPC (wss://), Ethereum uses HTTP with optional Upgrade (https://).
+  # Where is your node? The gateway proxies to it.
+  echo ""
+  echo "Where does your node listen? (host.docker.internal reaches this host;"
+  echo "use an IP or hostname for a node on another machine)"
+  backend_host=$(prompt_value "Node host" "host.docker.internal")
+  backend_port=""
+  backend_http_port=""
+  backend_ws_port=""
+  if [ "$gateway_template" = "tao" ]; then
+    backend_port=$(prompt_value "Node RPC/WS port" "9944")
+  else
+    backend_http_port=$(prompt_value "Node HTTP JSON-RPC port" "8545")
+    backend_ws_port=$(prompt_value "Node WebSocket port" "8546")
+  fi
+
+  # TLS / endpoint. Substrate uses WS for JSON-RPC (wss://), EVM chains use
+  # HTTP with optional Upgrade (https://).
   use_certbot=false
   domain=""
   local default_scheme="wss"
-  [ "$chain" = "eth" ] && default_scheme="https"
+  [ "$gateway_template" = "eth" ] && default_scheme="https"
 
   if prompt_yn "Do you have a domain name?"; then
     domain=$(prompt_value "Enter your domain name" "")
@@ -517,97 +340,8 @@ main() {
     domain="$public_ip"
   fi
 
-  # Node tier (chain-specific terminology).
-  archive=false
-  eth_tier="minimal"
-  if [ "$chain" = "eth" ]; then
-    echo ""
-    echo "Ethereum tier:"
-    echo "  minimal - general-purpose RPC, recent state only (reth --minimal) — earns from eth_* at tip"
-    echo "  archive - general-purpose RPC, full archive (reth default) — earns from trace_*, debug_*, eth_* at any depth (including eth_getLogs at depth)"
-    echo "  proof   - eth_getProof only (erigon, ~500 GB disk); not recommended — Blockmachine runs an in-house Erigon as a backstop because external proof supply is not expected to be profitable. See README before choosing this tier."
-    eth_tier=$(prompt_value "Tier" "minimal")
-    eth_tier="${eth_tier,,}"
-    case "$eth_tier" in
-      minimal)
-        check_tier_resources "$MIN_RAM_MB_ETH_MINIMAL" "ETH minimal tier"
-        check_tier_disk 400 "ETH minimal tier"
-        ;;
-      archive)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH archive tier"
-        check_tier_disk 3000 "ETH archive tier"
-        echo ""
-        echo "  Archive uses reth in default (non-pruned) mode and requires"
-        echo "  ~3 TB of fast SSD/NVMe. The compose file bootstraps the datadir"
-        echo "  from Paradigm's archive snapshot, reaching live tip in ~1-2h."
-        echo "  Earns from the bulk of customer ETH RPC: trace_*, debug_*, and"
-        echo "  eth_* (including eth_getLogs) against any historical block."
-        echo "  eth_getProof traffic routes to proof-tier backends."
-        ;;
-      proof)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH proof tier"
-        check_tier_disk 700 "ETH proof tier"
-        echo ""
-        echo "  Proof uses erigon with state/history pruned beyond the last"
-        echo "  ~10,064 blocks (~33h) — disk footprint ~500 GB. Initial sync"
-        echo "  from torrents/peers takes a day or more."
-        echo ""
-        echo "  Proof-tier backends serve eth_getProof only — Erigon's responses"
-        echo "  differ from Reth's audit reference so the network restricts this"
-        echo "  tier to proof traffic. eth_getProof is a small share of total ETH"
-        echo "  traffic and Blockmachine runs an in-house Erigon as a backstop,"
-        echo "  so external proof-tier operators should not expect material"
-        echo "  earnings. If you're choosing a client for general ETH RPC mining,"
-        echo "  pick Reth and the minimal or archive tier."
-        ;;
-      *)
-        error "Unknown tier '${eth_tier}'. Choose 'minimal', 'archive', or 'proof'."
-        ;;
-    esac
-  else
-    echo ""
-    node_type=$(prompt_value "Node type: lite or archive?" "lite")
-    case "$node_type" in
-      [Aa]*) archive=true ;;
-    esac
-
-    if [ "$archive" = true ]; then
-      echo ""
-      echo "  Archive node uses RocksDB. The chain data is currently ~3.2 TB and growing."
-      echo "  You will need at least 2x that (~6.5 TB) for snapshot extraction."
-      echo "  May take 6-12 hours to sync without a snapshot."
-    fi
-  fi
-
-  # Snapshot (tao archive nodes only — eth archive uses erigon's built-in
-  # torrent-based snapshot fetch, so no URL prompt is needed).
-  snapshot_url=""
-  snapshot_stream=false
-  if [ "$chain" = "tao" ] && [ "$archive" = true ]; then
-    echo ""
-    echo "Speed up sync by restoring a snapshot."
-    echo "Get a snapshot URL: ${bm_prefix} miner snapshot --type archive"
-    echo ""
-    snapshot_url=$(prompt_value "Snapshot URL (or press Enter to skip)" "")
-  fi
-
-  if [ -n "$snapshot_url" ]; then
-    echo ""
-    echo "  Restore method:"
-    echo "    1) Download first — requires ~2x disk, supports resume if connection drops"
-    echo "    2) Stream directly — requires ~1x disk, must restart from scratch if interrupted"
-    restore_method=$(prompt_value "Choose restore method" "1")
-    case "$restore_method" in
-      2) snapshot_stream=true ;;
-    esac
-
-    if [ "$snapshot_stream" = false ]; then
-      check_snapshot_disk_space "$snapshot_url"
-    fi
-  fi
-
-  # Alias — default prefix reflects the chain so multi-chain operators can tell
-  # nodes apart at a glance in the dashboard.
+  # Alias — default prefix reflects the chain so multi-chain operators can
+  # tell nodes apart at a glance.
   echo ""
   default_alias="${chain}-$(echo "$domain" | tr '.' '-')"
   alias=$(prompt_value "Node alias (friendly name)" "$default_alias")
@@ -625,7 +359,7 @@ main() {
   secret=$(prompt_value "Bearer token secret" "$default_secret")
 
   echo ""
-  info "Configuration complete. Setting up infrastructure..."
+  info "Configuration complete. Setting up the gateway..."
   echo ""
 
   # ── Non-interactive: install, configure, start ────────────────────
@@ -639,64 +373,20 @@ main() {
   fi
   check_compose_version
 
-  # Stop existing services if re-running (so port checks pass). Try every
-  # known compose file so switching chains during a re-install also works.
-  # --remove-orphans sweeps the certbot service if the previous install used
-  # docker-compose.tls.yml but this one doesn't.
-  if [ -d "${INSTALL_DIR}" ]; then
+  # Stop existing services if re-running (so port checks pass).
+  if [ -d "${INSTALL_DIR}" ] && [ -f "${INSTALL_DIR}/docker-compose.yml" ]; then
     info "Stopping any existing services for re-install..."
-    for f in docker-compose.yml \
-             docker-compose.eth-minimal.yml \
-             docker-compose.eth-archive.yml \
-             docker-compose.eth-proof.yml; do
-      if [ -f "${INSTALL_DIR}/${f}" ]; then
-        docker compose -f "${INSTALL_DIR}/${f}" down --remove-orphans 2>/dev/null || true
-      fi
-    done
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" down --remove-orphans 2>/dev/null || true
   fi
   check_port 80
   check_port 443
 
-  # P2P port differs per chain — substrate uses 30333, ethereum uses 30303.
-  p2p_port=30333
-  [ "$chain" = "eth" ] && p2p_port=30303
-
-  # Preflight chain-specific ports so docker fails fast and visibly, not with
-  # a cryptic late "address already in use" inside compose up.
-  check_port "$p2p_port" tcp
-  if [ "$chain" = "eth" ]; then
-    check_port "$p2p_port" udp
-    case "$eth_tier" in
-      minimal|archive)
-        # Both reth tiers run an external Lighthouse beacon node alongside.
-        check_port 9000 tcp
-        check_port 9000 udp
-        check_port 9001 udp
-        ;;
-      proof)
-        check_port 4000 tcp
-        check_port 4000 udp
-        ;;
-    esac
-  fi
-
-  # Open firewall ports if ufw is active
+  # Open firewall ports if ufw is active. Your node's own ports (p2p etc.)
+  # are yours to manage.
   if command -v ufw >/dev/null && ufw status | grep -q "active"; then
-    info "Opening firewall ports (80, 443, ${p2p_port})..."
+    info "Opening firewall ports (80, 443)..."
     ufw allow 80/tcp
     ufw allow 443/tcp
-    ufw allow "${p2p_port}/tcp"
-    ufw allow "${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "minimal" ] || [ "$eth_tier" = "archive" ]; }; then
-      # Lighthouse beacon P2P (TCP+UDP on 9000, QUIC discovery UDP on 9001).
-      ufw allow 9000/tcp
-      ufw allow 9000/udp
-      ufw allow 9001/udp
-    elif [ "$chain" = "eth" ] && [ "$eth_tier" = "proof" ]; then
-      # Caplin (erigon built-in CL) beacon P2P on port 4000.
-      ufw allow 4000/tcp
-      ufw allow 4000/udp
-    fi
   fi
 
   # Clone or update the repo
@@ -721,94 +411,17 @@ main() {
     error "Certificates required for domain without Let's Encrypt. Re-run and choose Let's Encrypt, or provide certs."
   fi
 
-  # Write .env (chain-aware: emits ETH_TIER, EL_CLIENT, BACKEND_HTTP/WS_PORT for eth)
-  if [ "$chain" = "eth" ]; then
-    write_env ".env" "$secret" "$domain" "eth" "$eth_tier"
-  else
-    write_env ".env" "$secret" "$domain" "tao"
-  fi
+  # Write .env
+  write_env ".env" "$secret" "$domain" "$chain"
   info ".env written"
 
-  # Show registration details now (safe to Ctrl+C during sync)
+  # Show registration details
   print_registration
 
-  # Restore snapshot if provided
-  if [ -n "$snapshot_url" ]; then
-    # Detect compression from URL
-    case "$snapshot_url" in
-      *.tar.lz4*)
-        decompress_cmd="lz4 -dc"
-        decompress_pkg="lz4"
-        snapshot_file="snapshot.tar.lz4"
-        ;;
-      *)
-        decompress_cmd="zstd -d --stdout"
-        decompress_pkg="zstd"
-        snapshot_file="snapshot.tar.zst"
-        ;;
-    esac
-
-    if ! command -v "${decompress_cmd%% *}" >/dev/null; then
-      info "Installing ${decompress_pkg}..."
-      apt-get install -y -qq "$decompress_pkg" >/dev/null 2>&1 ||
-        error "Failed to install ${decompress_pkg}. Install manually: apt install ${decompress_pkg}"
-    fi
-
-    volume_name="blockmachine-miner_node_data"
-    restore_cmd="docker run --rm -i -v ${volume_name}:/data alpine tar xf - -C /data"
-
-    info "Creating data volume..."
-    docker volume create "$volume_name" >/dev/null 2>&1 || true
-
-    if [ "$snapshot_stream" = true ]; then
-      info "Streaming snapshot directly..."
-      if curl -fL "$snapshot_url" | $decompress_cmd | $restore_cmd; then
-        info "Snapshot restored"
-      else
-        error "Stream restore failed. Re-run the installer to try again."
-      fi
-    else
-      if [ -f "$snapshot_file" ] && [ -s "$snapshot_file" ]; then
-        info "Snapshot file found, resuming/skipping download"
-      fi
-
-      info "Downloading snapshot..."
-      curl -fL -C - "$snapshot_url" -o "$snapshot_file" ||
-        error "Download failed. Re-run the installer to resume where you left off."
-
-      info "Restoring snapshot..."
-      if $decompress_cmd "$snapshot_file" | $restore_cmd; then
-        info "Snapshot restored (keeping file until node is healthy)"
-      else
-        warn "Snapshot restore failed. The downloaded file has been kept."
-        echo "    Re-run the installer to retry, or restore manually:"
-        echo "    $decompress_cmd $snapshot_file | $restore_cmd"
-        error "Snapshot restore failed"
-      fi
-    fi
-  fi
-
-  # Start services. Compose file selection:
-  #   tao + lite      → docker-compose.yml
-  #   tao + archive   → docker-compose.yml + docker-compose.archive.yml
-  #   eth + minimal   → docker-compose.eth-minimal.yml
-  #   eth + archive   → docker-compose.eth-archive.yml
-  #   eth + proof     → docker-compose.eth-proof.yml
-  #   + tls (any)     → adds docker-compose.tls.yml
+  # Start the gateway stack
   echo ""
-  info "Starting services..."
-  if [ "$chain" = "eth" ]; then
-    case "$eth_tier" in
-      archive) compose_cmd="docker compose -f docker-compose.eth-archive.yml" ;;
-      proof)   compose_cmd="docker compose -f docker-compose.eth-proof.yml" ;;
-      *)       compose_cmd="docker compose -f docker-compose.eth-minimal.yml" ;;
-    esac
-  else
-    compose_cmd="docker compose -f docker-compose.yml"
-    if [ "$archive" = true ]; then
-      compose_cmd="$compose_cmd -f docker-compose.archive.yml"
-    fi
-  fi
+  info "Starting the gateway..."
+  compose_cmd="docker compose -f docker-compose.yml"
   if [ "$use_certbot" = true ]; then
     compose_cmd="$compose_cmd -f docker-compose.tls.yml"
   fi
@@ -816,17 +429,9 @@ main() {
 
   if wait_for_health; then
     info "Gateway is healthy"
-    if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
-      rm -f "$snapshot_file"
-      info "Snapshot file removed"
-    fi
   else
-    warn "Gateway not yet healthy. The chain node may still be syncing."
+    warn "Gateway not yet healthy. Check that your node is reachable at the host/port you gave."
     echo "    Check status: ${compose_cmd} logs -f"
-    if [ -n "${snapshot_file:-}" ] && [ -f "$snapshot_file" ]; then
-      warn "Keeping snapshot file until node is confirmed healthy."
-      echo "    Remove manually once healthy: rm $snapshot_file"
-    fi
   fi
 
   if [ "$use_certbot" = true ]; then
@@ -836,36 +441,22 @@ main() {
     echo "    Certificates auto-renew every 12 hours."
   fi
 
-  echo ""
-  wait_for_sync || true
-
   # Done
   echo ""
   echo "========================================"
-  echo " Miner is running!"
+  echo " Gateway is running!"
   echo "========================================"
   echo ""
-  echo "Manage this node:"
+  echo "Manage it:"
   echo "  Logs:    ${compose_cmd} logs -f"
   echo "  Update:  cd ${INSTALL_DIR} && git pull && ${compose_cmd} pull && ${compose_cmd} up -d"
   echo "  Health:  curl -sSf http://localhost/health"
   echo ""
   if ! command -v ufw >/dev/null || ! ufw status | grep -q "active"; then
-    local extra_ports="${p2p_port}/tcp"
-    [ "$chain" = "eth" ] && extra_ports="${p2p_port}/tcp ${p2p_port}/udp"
-    if [ "$chain" = "eth" ] && { [ "$eth_tier" = "minimal" ] || [ "$eth_tier" = "archive" ]; }; then
-      extra_ports="${extra_ports} 9000/tcp 9000/udp 9001/udp"
-    fi
-    [ "$chain" = "eth" ] && [ "$eth_tier" = "proof" ] && \
-      extra_ports="${extra_ports} 4000/tcp 4000/udp"
-
     echo "Firewall:"
     echo "  Consider enabling a firewall if you haven't already:"
-    local rules="ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp"
-    for port in $extra_ports; do
-      rules="${rules} && ufw allow ${port}"
-    done
-    echo "    ${rules} && ufw enable"
+    echo "    ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable"
+    echo "  Your node's own ports (p2p etc.) are yours to manage."
     echo ""
   fi
 }
