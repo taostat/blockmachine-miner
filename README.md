@@ -1,5 +1,19 @@
 # Blockmachine Miner
 
+- [How it works](#how-it-works)
+- [Node Eligibility Requirements](#node-eligibility-requirements)
+- [Capacity Testing](#capacity-testing)
+- [Getting started](#getting-started)
+- [Pricing](#pricing)
+- [TLS options](#tls-options)
+- [Manual setup](#manual-setup-without-install-script)
+- [Architecture](#architecture)
+- [Secret rotation](#secret-rotation-zero-downtime)
+- [Configuration](#configuration)
+- [Day-to-day operations](#day-to-day-operations)
+- [CLI reference](#cli-reference)
+- [Troubleshooting](#troubleshooting)
+
 ## How it works
 
 ```
@@ -12,86 +26,178 @@ Customer → Gateway → Your Node
          Emissions paid per CU served
 ```
 
-1. You run a subtensor node behind an nginx gateway that authenticates requests from the Blockmachine network
+1. You run your own node for your chosen chain, fronted by our nginx gateway that authenticates requests from the Blockmachine network
 2. The protocol gateway routes customer RPC requests to your node based on quality score and price
 3. Validators read gateway logs, verify correctness, and submit weights on-chain each epoch (~72 minutes)
 4. You earn emissions proportional to the CUs you served at your bid price
 
-## Prerequisites
+## Node Eligibility Requirements
 
-### Supported chains and accepted clients
+Eligibility is **per chain and per node**. A node failing on one chain does not affect your
+nodes on other chains.
 
-| chain | chain ID | accepted clients | tiers |
-|-------|----------|------------------|-------|
-| `tao` | — | any Subtensor node | lite, archive |
-| `eth` | 1 | reth, erigon | minimal, archive, proof |
-| `bsc` | 56 | geth, reth | lite, archive |
-| `base` | 8453 | geth, reth (op-geth / op-reth) | lite, archive |
-| `polygon` | 137 | bor, erigon, geth | lite, archive |
-| `optimism` | 10 | geth, reth (op-geth / op-reth) | lite, archive |
-| `arbitrum` | 42161 | nitro, geth | lite, archive |
+### Universal requirements (every chain, every node type)
 
-### What we expect of the node itself
+| # | Requirement | What we check |
+|---|---|---|
+| U1 | **Correct chain** | `eth_chainId` (or the substrate genesis hash on TAO) matches the chain you registered the node on. |
+| U2 | **Honest node type** | You declare `archive` or `full`. The declaration is verified (see below). Claiming archive without archive state is an eligibility failure, not a scoring nuance. |
+| U3 | **Reachable as registered** | The exact endpoint URL you registered must accept WebSocket connections and answer JSON-RPC on it. If your endpoint lives under a path, register the URL **with** the path. We test what you registered, not what you meant. |
+| U4 | **At the tip** | The node tracks the chain head. A node that persistently lags the network tip is not serving the chain. |
+| U5 | **Standard responses** | Correct JSON-RPC 2.0 shapes, including on errors. Proxies that return HTML error pages, rewrite error codes, or inject non-standard responses fail this. |
+| U6 | **Standard subscriptions** | `eth_subscribe(["newHeads"])` (or substrate equivalent) must work and actually deliver notifications. |
+| U7 | **Consistent identity** | `web3_clientVersion` reports a real client honestly, matching the chain's accepted-client list (enforced at registration and re-checked continuously). Masking what you run is an eligibility failure. Known exception: Avalanche's coreth reports a bare version string with no client name, so Avalanche uses chain-ID + behaviour checks instead of a name match — an honest coreth node is never failed for its client string. |
+| U8 | **Continuous service** | A required feature must be served **continuously**, not occasionally. A feature that works some of the time is treated as not served. (Brief reconnect blips are tolerated; flapping is not.) |
 
-- Complete and correct responses across the chain's history for the tier you claim.
-- **Archive** means genuine historical state, not a recent-window node. Lite and full nodes are welcome and serve non-archive traffic, but only archive nodes are eligible for the archive base incentive.
+### Archive node requirements
 
-Nodes are re-checked continuously, not only at registration. Capability is determined by what your node actually answers, so there is nothing to declare beyond pointing us at the endpoint.
+A node declared **archive** must serve **state and blocks all the way back to genesis**.
 
-Hardware guidance below covers `tao` and `eth`, the two chains this repo ships
-compose files for. For the other chains, follow your client's own hardware
-guidance for the tier you intend to run — an archive node needs archive-sized
-storage whichever chain it is on.
+- Verified by random sampling: we ask for full blocks, state reads and (where the chain's
+  clients support it) traces at randomly chosen historical heights across the entire chain
+  history. There is no depth that is safe to prune.
+- The samples are never announced in advance and never reused, so there is nothing to warm and
+  nothing to precompute. The only way to pass is to hold the data.
+- An archive node must also serve everything a full node serves.
 
-### Hardware: Subtensor (`tao`)
+### Full node requirements
 
-| Resource | Lite | Archive |
-|----------|------|---------|
-| Architecture | x86_64 | x86_64 |
-| CPU | 4+ cores | 4+ cores |
-| RAM | 16 GB+ | 16 GB+ |
-| Disk | 100 GB SSD | 4+ TB SSD |
-| Sync time | ~15 min (warp sync) | Days (or use snapshot) |
-| Ports | 80, 443, 30333 | 80, 443, 30333 |
+A node declared **full** must serve the chain head and the recent range correctly:
 
-### Hardware: Ethereum (`eth`, mainnet only)
+- Full blocks and state for at least the **last 100 blocks**. (This floor will be configured
+  individually per chain in the near future; changes are published before they apply.)
+- All universal requirements above.
+- A full node is never asked archive-depth questions and is never penalised for honestly being
+  a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
+  while serving full is not.
 
-| Resource | Minimal (reth `--minimal`) | Archive (reth default) | Proof (erigon) |
-|----------|---------------------------|-----------------------------|-------------------------|
-| Architecture | x86_64 | x86_64 | x86_64 |
-| CPU | 4+ cores | 8+ cores recommended | 8+ cores recommended |
-| RAM | 16 GB+ | 32 GB+ recommended | 32 GB+ recommended |
-| Disk | ~300 GB NVMe | ~3 TB NVMe | ~500 GB NVMe |
-| Sync time | ~1-2h from snapshot | ~24-48h from snapshot | ~1-2h from snapshot |
-| Ports | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303, 9000/tcp+udp, 9001/udp | 80, 443, 30303 |
-| Serves | Recent `eth_*` + `eth_subscribe` over WS | `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) at any depth | **Network policy: `eth_getProof` only** (see note below) |
+### Per-chain requirements
 
-**Choosing your tier:**
+| Chain | Accepted client families | Mempool | Trace/debug | State proofs |
+|---|---|---|---|---|
+| **Ethereum** (`eth`, chain-id 1) | **reth** — run this. (erigon is also accepted, but only because we operate one erigon node ourselves for proof-based verification; miners should run reth.) | ✅ | ✅ | ❌ |
+| **BSC** (`bsc`, 56) | geth (bsc-geth), reth (reth-bsc) | ✅ | ✅ | ✅ |
+| **Base** (`base`, 8453) | reth | ✅ | ✅ | ✅ |
+| **Optimism** (`optimism`, 10) | reth (op-reth) | ✅ | ✅ | ✅ |
+| **Polygon** (`polygon`, 137) | bor | ✅ | ✅ | ✅ |
+| **Avalanche C-Chain** (`avalanche`, 43114) | coreth / avalanchego (see U7 exception) | ❌ | ✅ | ✅ |
+| **Scroll** (`scroll`, 534352) | geth (scroll-geth) | ✅ | ✅ | ✅ |
+| **Mantle** (`mantle`, 5000) | geth (mantle op-geth) | ❌ | ✅ | ✅ |
+| **Arbitrum One** (`arbitrum`, 42161) | nitro (a geth fork — either name is accepted in the version string) | ❌ | ✅ | ✅ |
+| **Robinhood Chain** (`robinhood`, 4663) | nitro (as above) | ❌ | ✅ | ✅ |
+| **TAO (Bittensor)** (`tao`) | subtensor | ✅ | ❌ | ✅ |
 
-- **Minimal (reth `--minimal`):** general-purpose RPC, recent state only. Earns from `eth_*` at tip — recent-state queries and recent block/tx/receipt lookups. State pruned beyond ~33h, so this tier cannot answer historical state or proof queries.
-- **Archive:** general-purpose RPC, full archive. Earns from the bulk of customer ETH RPC: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. Does not serve `eth_getProof` — proof traffic routes to Proof.
-- **Proof:** proof specialist. Earns from `eth_getProof` only — Erigon's responses differ from Reth's audit reference, so the network restricts this tier to proof traffic. Not recommended: `eth_getProof` is a small share of total ETH traffic, the disk cost is ~500 GB, and a specialist Erigon deployment is unlikely to pay back at current demand. Because external operators are not expected to find this worthwhile, Blockmachine runs an in-house Erigon as a backstop so proof availability is guaranteed regardless of miner supply. Revisit if Reth ships a wider proof window — at which point this tier may be retired entirely.
+**Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
+`state_getReadProof` on substrate) return answers that can be verified mathematically against
+the block's state root — no comparison node, no trust. Where the chain's clients emit proofs,
+we verify them, and a proof that does not check out is treated as a wrong answer, not a
+formatting quirk.
+### How testing works
 
-Each tier is matched to traffic based on its capabilities. Minimal earns from current-state queries; Archive earns from the bulk of customer ETH RPC including historical traces and logs; Proof serves `eth_getProof` only, a small slice the network covers in-house as a backstop. The gateway routes per-method based on the capabilities you advertise, so you only see traffic you can serve.
+- Every node is re-tested **regularly and automatically**. Tests are randomly timed; there is
+  no schedule to prepare for.
+- A failure that looks transient (a timeout while your node is under heavy load, a brief
+  disconnect) is retried before any flag is set. A node is never flagged on a single ambiguous
+  observation.
+- A failure that cannot be transient (wrong chain ID, a required method returning
+  "method not found", pruned state on a declared archive) flags immediately.
+- **New nodes are tested first, with priority.** A newly registered node must pass the full
+  eligibility battery for its chain and type **before** it becomes eligible for traffic and
+  incentive. You will not wait long: new-node tests jump the queue.
+- Your node's current eligibility, the reason for any flag, when it was last tested, and when
+  it will be re-tested are all visible in the miner API.
 
-Any VPS or dedicated server with Docker will work for `tao` and ETH minimal. Archive tiers benefit substantially from NVMe storage. The install script handles all dependencies (Docker, git, certificates).
+### What eligibility failure means
 
-## Choosing your Ethereum client
+- **No traffic** routed to that node on that chain.
+- **No incentive** earned by that node on that chain — a node that is not eligible is not in
+  the payout set at all.
+- Fix the issue, pass the next test, and both come back automatically.
 
-**Run Reth.** The network routes the bulk of ETH traffic — every `eth_*`
-history method, every `trace_*`, every `debug_*` — to Reth backends, and
-Reth is the audit reference, so its responses are what the gateway
-validates against.
+## Capacity Testing
 
-Erigon is supported only as a proof specialist (`eth_getProof`).
-`eth_getProof` is a small fraction of total ETH traffic, and a
-~500 GB Erigon deployment is unlikely to pay back at current demand.
-Because external operators are not expected to find this worthwhile,
-Blockmachine runs an in-house Erigon as a backstop to guarantee
-proof availability — not to crowd anyone out. Unless you already
-run Erigon for other reasons, pick Reth.
+Eligibility (see *Node Eligibility Requirements*) decides whether a node serves what the chain
+requires. **Capacity testing decides how much traffic an eligible node deserves.** It measures
+the real hardware behind a node under sustained load and produces a score that scales the
+node's routing weight — so operators who invest in genuinely strong hardware receive more
+requests and more incentive, because they have earned it.
+
+### What we measure
+
+We load your node with **heavy, real workloads** — the same class of expensive questions
+paying customers actually ask — at increasing levels of concurrency, and we measure what
+happens. For archive nodes that means archive-depth workloads. Full nodes are capacity-tested
+too, on what full nodes are expected to serve — head and recent-range traffic within their
+retention window; a full node is never graded on archive-depth questions.
+
+- **Sustained latency under load**, not idle latency. A fast answer to a single request tells
+  us about a disk seek; what we score is how the node behaves when many expensive requests
+  arrive at once.
+- **Degradation**: the ratio between your node's performance at rest and under load. Strong
+  hardware degrades gracefully; overcommitted hardware collapses.
+- **Completion**: whether requests under load are answered at all, or start failing.
+
+Every run is **internally calibrated**: the scale is set by control measurements taken in the
+same run, under the same conditions as yours — never by an abstract number. Runs are repeated,
+and a run that could not measure your node fairly (a problem on our side, chain conditions)
+writes **no score** — an inconclusive run never harms you.
+
+### What the score does
+
+- The score multiplies your node's routing weight on that chain. Higher score → larger share
+  of traffic → larger share of incentive.
+- Scores come with a written reason you can read: what was measured, against what bar, and
+  which axis set your score.
+- Scores are replaced by newer runs; they do not silently decay. A hardware upgrade shows up
+  the next time you are measured.
+- A node that has **never been measured** on a chain where scoring is armed is not routed
+  premium traffic until its first measurement — new nodes are measured with priority, so this
+  window is short.
+
+### What we deliberately do not publish
+
+We do not publish the exact probe methods, the block ranges, the concurrency ladder, the
+scoring thresholds, or the run schedule — and we change them. This is not secrecy for its own
+sake; every detail we publish becomes a thing to tune for instead of a thing to be. The
+properties below are what make the test ungameable, and these we publish proudly:
+
+- **No question is ever asked twice.** Every request in every run uses fresh, randomly chosen
+  targets, disjoint across nodes and across runs. Caches, canned answers and precomputation do
+  not help. The only way to answer fast is to be able to answer fast.
+- **The workload is genuinely heavy.** Cheap point-reads that a hot cache can serve in a
+  millisecond are not what we score. The probes cost real IO and real computation, the way
+  real archive traffic does.
+- **The test rides the same connection as customer traffic.** There is no separate "test
+  endpoint" to special-case.
+- **Every run carries its own controls, run through the same gauntlet.** If chain conditions
+  make a run unfair, the controls show it, and the run is discarded.
+
+### Rules for operators
+
+1. **Do not rate-limit, deprioritise, or divert gateway traffic.** The gateway connection is
+   the product: what your node serves through it *is* your capacity, and it is the only thing
+   we can fairly measure. If your infrastructure treats our load differently from customer
+   load — shaping it, shedding it, routing it to a different tier — your score will reflect
+   the degraded path you gave us, and that is the score that stands. If you believe a
+   measurement misrepresents you, raise it: every score carries its reasons, and runs can be
+   re-taken. But the fix is to serve the traffic, not to shape it.
+2. **Proxying to shared or resold capacity shows up.** Multiple registered nodes backed by one
+   pool of hardware degrade together under simultaneous load, and the scores will say so.
+3. **Fronting caches show up.** See "no question is ever asked twice."
+
+### Fairness commitments
+
+- You are only ever scored against measurements taken from your own node, calibrated within
+  the run they came from.
+- Inconclusive measurements never lower a score.
+- Scores, reasons and measurement times are visible to you.
+- Methodology changes are published before they change anyone's routing.
 
 ## Getting started
+
+**You bring the node.** Provisioning, syncing, disk sizing and snapshots are your
+responsibility — we provide the gateway that fronts your node and the CLI that registers and
+manages it. Your node must meet the eligibility requirements for its chain and declared type.
 
 ### Install the Blockmachine CLI
 
@@ -138,13 +244,11 @@ bash <(curl -sSL https://blockmachine.io/miner/install.sh)
 The script will:
 - Install git and Docker if missing
 - Clone this repository (or update it if re-running)
-- Ask which chain to serve (`tao` or `eth`)
+- Ask which chain your node serves
 - Ask whether you have a domain name or are using an IP address
 - Set up TLS (auto-renewing Let's Encrypt for domains, or self-signed for IPs)
-- Ask for tier (`lite`/`archive` for tao, `minimal`/`archive`/`proof` for eth)
-- Offer to restore from a snapshot (tao archive only — eth archive tiers fetch from snapshots/torrents automatically)
 - Generate a bearer token secret
-- Start the gateway and the chain node(s)
+- Start the gateway, pointed at your node's RPC port
 - Print the registration commands to run from your local machine
 
 At the end you'll see output like:
@@ -155,7 +259,7 @@ At the end you'll see output like:
 ========================================
 
   Endpoint: wss://203.0.113.50
-  Chain:    tao (lite)
+  Chain:    tao
   Alias:    tao-203-0-113-50
   Secret:   stored in /root/blockmachine-miner/.env
 
@@ -193,17 +297,10 @@ Or run `bm miner add` with no flags for interactive prompts.
 - Your secret is hashed and stored — the gateway uses it to authenticate when routing requests to you
 - Your price bid is recorded for the next epoch
 
-### Wait for sync and traffic
+### Verify and receive traffic
 
-Your subtensor node needs to sync before it can serve requests. A lite node warp-syncs in about 15 minutes. An archive node takes much longer (use a snapshot to speed this up).
-
-Check sync progress (on your server):
-
-```bash
-docker compose logs -f node
-```
-
-Once synced, the gateway will start routing traffic to your node. Verify everything is working:
+Once your node is synced and the gateway is up, the network starts routing traffic to you.
+Verify everything is working:
 
 ```bash
 bm miner test <alias>              # Test TLS, health, and authenticated RPC
@@ -245,12 +342,7 @@ scrape_configs:
 
 Metrics are operator telemetry for visibility and alerting. They are authenticated and useful for debugging sync, peer, disk, TLS, and version rollout issues, but they are not proof that a miner is honestly serving work.
 
-The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load, node data volume usage, TLS certificate expiry, and the live deployed git SHA. It also appends the underlying client's native Prometheus output:
-
-- **tao** — Subtensor metrics from the node's internal `:9615` endpoint
-- **eth minimal** — Reth metrics from `:9101`, plus a beacon-API sync probe against Lighthouse on `:5052`
-- **eth archive** — Reth metrics from `:9101`, plus a beacon-API sync probe against Lighthouse on `:5052`
-- **eth proof** — Erigon metrics from `:6060/debug/metrics/prometheus`
+The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load, TLS certificate expiry, and the live deployed git SHA, and appends your chain client's native Prometheus output where the gateway can reach it.
 
 ## Pricing
 
@@ -280,65 +372,6 @@ Generated automatically during install. Valid for 10 years. The CLI pins the cer
 
 Place `cert.pem` and `key.pem` in the `ssl/` directory before running the install script. Select "no" when prompted about Let's Encrypt.
 
-## Node tiers
-
-### Subtensor: lite (default)
-
-Syncs via warp sync in ~15 minutes. Serves recent blocks and current state. Lower storage requirements (~100 GB). Suitable for most RPC methods.
-
-Historical state queries for pruned blocks will return `null` — the gateway routes these to archive nodes when available.
-
-### Subtensor: archive
-
-Full block history from genesis. Requires 4+ TB disk and takes days to sync from scratch. To speed up initial sync, use a snapshot:
-
-```bash
-# On your local machine, get a snapshot URL
-bm miner snapshot --type archive
-
-# Paste the URL when prompted during install on your server
-```
-
-To start an archive node:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.archive.yml up -d
-```
-
-### Ethereum: minimal
-
-Reth in `--minimal` mode: keeps the last ~10,064 blocks (~33h) of state and history, prunes the rest. Disk footprint is around 300 GB on mainnet. The compose file bootstraps the datadir from Paradigm's official snapshot via `reth download` on first run, so the node reaches live tip in ~1-2h instead of days of genesis-sync over P2P. A Lighthouse beacon node runs alongside reth and drives it via the Engine API (checkpoint-synced from `mainnet.checkpoint.sigp.io`, ready in minutes). `eth_getProof` works against any block in the ~33h window; older blocks return an error.
-
-To start a minimal-tier node manually:
-
-```bash
-docker compose -f docker-compose.eth-minimal.yml up -d
-```
-
-### Ethereum: archive
-
-Reth in default (non-pruned) mode: full historical bodies, receipts, logs, headers, and state back to genesis. Disk footprint is around 2.6 TB on mainnet (allow ~3 TB headroom). The compose file bootstraps the datadir from Paradigm's official archive snapshot via `reth download --archive` on first run — same ~1-2h wall-clock benefit over genesis P2P sync. Same Lighthouse beacon sidecar as the Minimal tier.
-
-This tier serves the bulk of customer ETH RPC traffic on the network: `trace_*`, `debug_*`, and `eth_*` (including `eth_getLogs`) against any historical block. The network routes `eth_getProof` to Proof backends — capability-based, not error-fallback — so Reth-archive operators don't generate proofs.
-
-To start an archive node manually:
-
-```bash
-docker compose -f docker-compose.eth-archive.yml up -d
-```
-
-### Ethereum: proof
-
-Erigon with `--prune.mode=full --prune.distance=10064 --prune.distance.blocks=10064`, plus Erigon's built-in Caplin consensus client (no separate Lighthouse service needed). Disk footprint is around 500 GB on mainnet. Serves `eth_getProof` and `eth_getAccount` at depths within the last ~10,064 blocks (~33h).
-
-**Network routing policy:** Erigon's responses differ from Reth's audit reference, so the network restricts Erigon backends to `eth_getProof` requests. All other ETH methods route to Reth backends (Latest or Archive). Erigon operators today receive a narrow, high-value slice of traffic; the bulk of ETH volume goes to the Reth tiers. This policy will be revisited when validator-side Erigon support ships.
-
-To start an proof node manually:
-
-```bash
-docker compose -f docker-compose.eth-proof.yml up -d
-```
-
 ## Manual setup (without install script)
 
 If you prefer to set things up yourself:
@@ -361,16 +394,11 @@ openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
   -keyout ssl/key.pem -out ssl/cert.pem \
   -subj "/CN=$IP" -addext "subjectAltName=IP:$IP"
 
-# Start services — choose the stack for your chain and tier:
-docker compose up -d                                           # tao lite (default)
-# docker compose -f docker-compose.yml \
-#   -f docker-compose.archive.yml up -d                        # tao archive
-# docker compose -f docker-compose.eth-minimal.yml up -d               # eth minimal (reth --minimal + lighthouse)
-# docker compose -f docker-compose.eth-archive.yml up -d  # eth archive (reth default + lighthouse)
-# docker compose -f docker-compose.eth-proof.yml up -d       # eth proof (erigon + caplin)
+# Start the gateway stack, pointed at your node's RPC port:
+docker compose up -d
 
-# For Let's Encrypt, add the TLS overlay (works for any chain):
-# docker compose -f <chain-compose>.yml -f docker-compose.tls.yml up -d
+# For Let's Encrypt, add the TLS overlay:
+# docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
 Then register from your local machine:
@@ -391,8 +419,8 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 │  Your Server                                 │
 │                                              │
 │  ┌──────────┐      ┌───────────────────┐     │
-│  │  nginx   │ :443 │  subtensor node   │     │
-│  │ gateway  │─────▶│  (lite/archive)   │     │
+│  │  nginx   │ :443 │  your chain node  │     │
+│  │ gateway  │─────▶│  (yours to run)   │     │
 │  │          │ :9944│                   │     │
 │  └──────────┘      └───────────────────┘     │
 │    │ :80 (health + ACME)    │ :30333 (p2p)   │
@@ -412,7 +440,7 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 ```
 
 - **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket and HTTP RPC to the chain node. Supports dual secrets for zero-downtime rotation. The eth gateway template routes by the `Upgrade` header so a single 443 endpoint serves both JSON-RPC and `eth_subscribe`.
-- **chain node** — Either a Bittensor subtensor (lite/archive), a reth execution client driven by Lighthouse over the Engine API (eth minimal with `--minimal`, or eth archive in default mode), or an erigon archive with built-in Caplin CL (eth proof).
+- **chain node** — yours: any accepted client for your chain, meeting the eligibility requirements for its declared type.
 - **metrics** — Exposes `/metrics` internally; nginx publishes it at `https://<endpoint>/metrics` with the same bearer auth as RPC.
 - **certbot** — Optional. Auto-renews Let's Encrypt certificates. Only used with domain-based setups.
 
@@ -453,7 +481,7 @@ Environment variables in `.env`:
 | `SECRET_V1` | (required) | Primary bearer token |
 | `SECRET_V2` | (empty) | Secondary token for zero-downtime rotation |
 | `DOMAIN` | (empty) | Domain for Let's Encrypt auto-renewal |
-| `CHAIN` | `tao` | Chain selection: `tao` or `eth` |
+| `CHAIN` | `tao` | Chain selection |
 | `METRICS_PORT` | `9100` | Internal metrics exporter port |
 | `SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | TLS certificate path in container |
 | `SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | TLS key path in container |
@@ -464,12 +492,9 @@ Chain-specific:
 
 | Variable | Default | Used by | Description |
 |----------|---------|---------|-------------|
-| `BACKEND_PORT` | `9944` | tao | Subtensor node RPC port |
-| `ETH_TIER` | (empty) | eth | `minimal`, `archive`, or `proof` |
-| `EL_CLIENT` | (empty) | eth | `reth` (`minimal`, `archive`) or `erigon` (`proof`) |
-| `BACKEND_HTTP_PORT` | `8545` | eth | EL HTTP JSON-RPC port |
-| `BACKEND_WS_PORT` | `8546` (reth) / `8545` (erigon) | eth | EL WebSocket port |
-| `CHECKPOINT_SYNC_URL` | `https://mainnet.checkpoint.sigp.io` | eth minimal, eth archive | Lighthouse beacon checkpoint source |
+| `BACKEND_PORT` | `9944` | tao | Your node's RPC port |
+| `BACKEND_HTTP_PORT` | `8545` | EVM chains | Your node's HTTP JSON-RPC port |
+| `BACKEND_WS_PORT` | `8546` | EVM chains | Your node's WebSocket port |
 
 ## Day-to-day operations
 
@@ -486,29 +511,10 @@ curl -fsS -H "Authorization: Bearer $SECRET_V1" https://<endpoint>/metrics
 
 ### Updating
 
-Pull the latest config and chain images, then restart. Use the same compose
-file the install script started — bare `docker compose` defaults to
-`docker-compose.yml` (the subtensor stack), which would replace an eth stack's
-containers with subtensor ones because service names collide.
+Pull the latest gateway config and images, then restart:
 
 ```bash
-# Subtensor (lite or archive):
 cd /root/blockmachine-miner && git pull && docker compose pull && docker compose up -d
-
-# Ethereum minimal:
-cd /root/blockmachine-miner && git pull \
-  && docker compose -f docker-compose.eth-minimal.yml pull \
-  && docker compose -f docker-compose.eth-minimal.yml up -d
-
-# Ethereum archive:
-cd /root/blockmachine-miner && git pull \
-  && docker compose -f docker-compose.eth-archive.yml pull \
-  && docker compose -f docker-compose.eth-archive.yml up -d
-
-# Ethereum proof:
-cd /root/blockmachine-miner && git pull \
-  && docker compose -f docker-compose.eth-proof.yml pull \
-  && docker compose -f docker-compose.eth-proof.yml up -d
 ```
 
 Or re-run the install script — it updates the repo automatically:
@@ -520,13 +526,8 @@ bash <(curl -sSL https://blockmachine.io/miner/install.sh)
 ### Stopping
 
 ```bash
-docker compose down                                       # subtensor
-docker compose -f docker-compose.eth-minimal.yml down             # eth minimal
-docker compose -f docker-compose.eth-archive.yml down # eth archive
-docker compose -f docker-compose.eth-proof.yml down     # eth proof
+docker compose down
 ```
-
-Node data is persisted in a Docker volume (`node_data`). Restarting will resume from where it left off.
 
 ## CLI reference
 
@@ -561,8 +562,6 @@ bm miner price set [alias] --price ... # Set price per compute unit
 bm miner price show [alias]            # Show current price
 bm miner price history [alias]         # Show price history
 
-# Snapshots
-bm miner snapshot                      # Get snapshot download URL
 ```
 
 When `[alias]` is omitted, the active node (set via `bm miner use`) is used.
@@ -571,7 +570,7 @@ When `[alias]` is omitted, the active node (set via `bm miner use`) is used.
 
 **Port 80 or 443 in use:** Stop the process using the port (`sudo lsof -i :443`) and try again.
 
-**Gateway unhealthy:** The subtensor node takes time to sync. Check `docker compose logs node` for sync progress. A lite node should be healthy within 15-20 minutes.
+**Gateway unhealthy:** Your node may still be syncing — check your node's own logs.
 
 **Authentication errors:** Run `bm miner login` to re-authenticate, then `bm miner secret show` to verify your secret is registered.
 
@@ -581,10 +580,8 @@ When `[alias]` is omitted, the active node (set via `bm miner use`) is used.
 
 **TLS errors (Let's Encrypt):** Check `docker compose logs certbot`. Ensure your domain's DNS A record points to your server and port 80 is reachable for the ACME challenge.
 
-**Node not syncing:** Ensure port 30333 (p2p) is open for outbound connections to the Bittensor network. Check `docker compose logs node` for peer connection status.
-
 **Firewall setup:** If using `ufw`, allow the required ports:
 
 ```bash
-sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw allow 30333/tcp
+sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
 ```
