@@ -361,7 +361,6 @@ wait_for_sync_eth() {
   info "Waiting for node to sync..."
   echo "    minimal tier (reth --minimal): ~1-2h from snapshot."
   echo "    archive tier (reth default):   ~24-48h from a snapshot."
-  echo "    proof tier   (erigon):         a day or more (built-in torrent fetch)."
   echo "    (Ctrl+C to skip — sync continues in the background)"
   echo ""
 
@@ -468,7 +467,7 @@ main() {
   echo ""
   echo "Which blockchain will this miner serve?"
   echo "  tao - Bittensor subtensor (default)"
-  echo "  eth - Ethereum mainnet (reth Latest, reth Archive, or erigon Archive)"
+  echo "  eth - Ethereum mainnet (reth Latest or reth Archive)"
   chain=$(prompt_value "Chain" "tao")
   chain="${chain,,}"
   case "$chain" in
@@ -525,7 +524,6 @@ main() {
     echo "Ethereum tier:"
     echo "  minimal - general-purpose RPC, recent state only (reth --minimal) — earns from eth_* at tip"
     echo "  archive - general-purpose RPC, full archive (reth default) — earns from trace_*, debug_*, eth_* at any depth (including eth_getLogs at depth)"
-    echo "  proof   - eth_getProof only (erigon, ~500 GB disk); not recommended — Blockmachine runs an in-house Erigon as a backstop because external proof supply is not expected to be profitable. See README before choosing this tier."
     eth_tier=$(prompt_value "Tier" "minimal")
     eth_tier="${eth_tier,,}"
     case "$eth_tier" in
@@ -542,26 +540,9 @@ main() {
         echo "  from Paradigm's archive snapshot, reaching live tip in ~1-2h."
         echo "  Earns from the bulk of customer ETH RPC: trace_*, debug_*, and"
         echo "  eth_* (including eth_getLogs) against any historical block."
-        echo "  eth_getProof traffic routes to proof-tier backends."
-        ;;
-      proof)
-        check_tier_resources "$MIN_RAM_MB_ETH_ARCHIVE" "ETH proof tier"
-        check_tier_disk 700 "ETH proof tier"
-        echo ""
-        echo "  Proof uses erigon with state/history pruned beyond the last"
-        echo "  ~10,064 blocks (~33h) — disk footprint ~500 GB. Initial sync"
-        echo "  from torrents/peers takes a day or more."
-        echo ""
-        echo "  Proof-tier backends serve eth_getProof only — Erigon's responses"
-        echo "  differ from Reth's audit reference so the network restricts this"
-        echo "  tier to proof traffic. eth_getProof is a small share of total ETH"
-        echo "  traffic and Blockmachine runs an in-house Erigon as a backstop,"
-        echo "  so external proof-tier operators should not expect material"
-        echo "  earnings. If you're choosing a client for general ETH RPC mining,"
-        echo "  pick Reth and the minimal or archive tier."
         ;;
       *)
-        error "Unknown tier '${eth_tier}'. Choose 'minimal', 'archive', or 'proof'."
+        error "Unknown tier '${eth_tier}'. Choose 'minimal' or 'archive'."
         ;;
     esac
   else
@@ -672,10 +653,6 @@ main() {
         check_port 9000 tcp
         check_port 9000 udp
         check_port 9001 udp
-        ;;
-      proof)
-        check_port 4000 tcp
-        check_port 4000 udp
         ;;
     esac
   fi
