@@ -1,0 +1,396 @@
+## BlockMachine TEE proxy-miner Envoy configuration.
+##
+## One data-plane listener on :8080 with two routes:
+##
+##   1. `/attestation/*` — forwarded to the co-located `bm-tee-attestd`
+##      process on loopback (127.0.0.1:8081). Serves the registry's
+##      `GET /attestation/info?nonce=` probes.
+##   2. Everything else — proxied to the hardcoded provider upstream
+##      (dRPC ETH in this release). Every RPC request — plain HTTP POST
+##      JSON-RPC and WebSocket upgrades alike — is rewritten onto the
+##      provider's `/ethereum/<key>` path (dRPC uses one path for both
+##      transports). The operator's `PROVIDER_API_KEY` is embedded
+##      (percent-encoded, unreserved chars literal) as that path segment
+##      at request time by the Lua filter (read from the process
+##      environment — the key is never rendered into this config).
+##
+## Inbound auth: the Lua filter checks `Authorization: Bearer <node
+## secret>` on the RPC routes (the proxied provider upstream).
+## The attestation surface `/attestation/*` is UNAUTHENTICATED per the
+## TEE proxy-miner contract: it returns only public attestation data
+## (the TDX quote, event log, and signed public claims), so requiring a
+## bearer there would force the registry to send the node secret over a
+## not-yet-verified TLS channel. Leaving it open lets the registry
+## capture + cryptographically bind the served RA-TLS cert BEFORE the
+## secret is ever transmitted. Dual-secret rotation is supported on the
+## RPC routes: `NODE_SECRET` and `NODE_SECRET_NEXT` are both accepted,
+## mirroring blockmachine-miner's nginx gateway (SECRET_V1 /
+## SECRET_V2_LINE).
+##
+## The secrets are NEVER rendered into this config. The Lua filter reads
+## them from the process environment at request time (`os.getenv`), so a
+## secret value is opaque DATA here — it can never close a Lua string
+## literal or otherwise alter the auth logic, whatever bytes it carries.
+## `start.sh` and `attestd` independently constrain the secret to the
+## narrow alphabet `[A-Za-z0-9._-]` and fail closed otherwise, matching
+## the registry.
+##
+## Provider upstream host: hardcoded per (chain, provider) in
+## `start.sh` — part of the image source, hence inside the measured
+## compose hash. A miner cannot redirect the proxy without moving the
+## hash, which the registry's `tee_image_versions` allowlist rejects.
+##
+## Rate limiting: deliberately NO local rate-limit filter on the RPC
+## path. The contract requires provider error responses
+## (429s, provider limit JSON-RPC errors) to pass through unmodified so
+## the registry's load test observes the provider's real rate limit — an
+## envoy-side token bucket would mask it. The overload manager below is
+## only a file-descriptor-exhaustion backstop.
+##
+## The `/attestation/*` route is the ONE exception: it is unauthenticated
+## and each request drives an expensive dstack get_quote, so it carries a
+## per-route `local_ratelimit` token bucket (via typed_per_filter_config
+## on that route). The listener-level filter has no token bucket, so it is
+## a no-op everywhere else — the RPC path never sees it. attestd adds a
+## second, independent bound: an in-process semaphore around get_quote.
+##
+## Data-plane TLS: the ingress listener terminates TLS **in the enclave**
+## with the RA-TLS certificate `bm-tee-ratls` mints at boot
+## (/tmp/bm-ratls/{cert,key}.pem). That cert's key is bound into a TDX
+## quote (`report_data = SHA-512("ratls-cert:" || SPKI_DER)`), so the
+## node registers its Phala `-8080s` TLS-passthrough endpoint: the dstack
+## gateway forwards the raw TLS stream and the caller receives this exact
+## enclave cert. The gateway verifies the RA-TLS binding per connection
+## and the registry pins the cert fingerprint, so a relay proxy cannot
+## serve traffic. (The default `-8080` form would terminate TLS at the
+## Phala edge with a CA cert and hide this binding — do not register it.)
+
+admin:
+  ## Bound to loopback only — config introspection from inside the CVM.
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
+
+## ── File-descriptor exhaustion backstop ─────────────────────────────
+##  Caps simultaneously open downstream connections so a connection
+##  flood can never exhaust the container's file descriptors. Sized
+##  below half the compose's nofile limit (65536), per Envoy's fd
+##  sizing guidance — see gm-miner's envoy.yaml for the full rationale.
+overload_manager:
+  resource_monitors:
+    - name: "envoy.resource_monitors.global_downstream_max_connections"
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+        max_active_downstream_connections: 8192
+
+static_resources:
+
+  listeners:
+    - name: ingress
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - ## ── RA-TLS termination ──────────────────────────────────────
+          ##  The ingress listener terminates TLS with the dstack-minted
+          ##  RA-TLS certificate. `bm-tee-ratls` writes the PEM key and
+          ##  cert to /tmp/bm-ratls/ before envoy starts (see start.sh);
+          ##  that step runs to completion first and a dstack failure
+          ##  aborts the container, so envoy never boots without the cert
+          ##  files in place. No `validation_context`: the data plane does
+          ##  not request a client cert. Caller identity is the node-secret
+          ##  bearer token (the Lua filter below); this TLS context exists
+          ##  to prove the enclave's attestation to the gateway (the
+          ##  opposite direction) — the served cert carries the TDX quote.
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                ## Advertise h2 then http/1.1 on ALPN; a client offering
+                ## only http/1.1 still negotiates h1 (first overlap).
+                alpn_protocols: ["h2", "http/1.1"]
+                tls_certificates:
+                  - certificate_chain:
+                      filename: /tmp/bm-ratls/cert.pem
+                    private_key:
+                      filename: /tmp/bm-ratls/key.pem
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                use_remote_address: true
+                ## Malformed HTTP/1.1 requests reset only their own
+                ## stream, not the connection.
+                stream_error_on_invalid_http_message: true
+                ## h2 is now negotiable via ALPN: isolate malformed h2
+                ## requests to their own stream instead of GOAWAY-ing the
+                ## whole connection (and dropping every multiplexed
+                ## subscription stream with it).
+                http2_protocol_options:
+                  override_stream_error_on_invalid_http_message: true
+                ## WebSocket upgrades must proxy through to the
+                ## provider's WS endpoint (eth_subscribe streams).
+                upgrade_configs:
+                  - upgrade_type: websocket
+                ## Long-lived subscription streams: allow an hour of
+                ## stream idleness before envoy resets. The per-route
+                ## `timeout: 0s` below disables the request timeout;
+                ## this idle timeout is the backstop that reaps truly
+                ## dead streams.
+                stream_idle_timeout: 3600s
+                route_config:
+                  name: proxy_routes
+                  virtual_hosts:
+                    - name: proxy
+                      domains: ["*"]
+                      routes:
+
+                        ## ── Attestation surface ─────────────────────
+                        ##  GET /attestation/info is served by the
+                        ##  co-located bm-tee-attestd process (see
+                        ##  start.sh), not by the provider upstream.
+                        ##  This path is UNAUTHENTICATED — the Lua
+                        ##  filter below returns it early, before the
+                        ##  bearer check, so the registry can verify the
+                        ##  RA-TLS cert before sending the node secret.
+                        ##  It carries only public attestation data.
+                        - match:
+                            prefix: "/attestation/"
+                          route:
+                            cluster: attestd
+                            timeout: 15s
+                          ## ── Attestation-only rate limit ────────────
+                          ##  /attestation/info is UNAUTHENTICATED and
+                          ##  every hit drives an expensive dstack
+                          ##  get_quote; HTTP/2 multiplexing defeats the
+                          ##  connection ceiling, so bound the request
+                          ##  rate with a per-route token bucket. This
+                          ##  override is the ONLY place the local rate
+                          ##  limit carries a token bucket — the
+                          ##  listener-level filter below is a no-op, so
+                          ##  the provider RPC route is untouched
+                          ##  and still surfaces the provider's own 429s
+                          ##  unmodified (the registry load test needs
+                          ##  that). attestd also caps concurrent quote
+                          ##  generation with an in-process semaphore.
+                          typed_per_filter_config:
+                            envoy.filters.http.local_ratelimit:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                              stat_prefix: attestation_rate_limiter
+                              token_bucket:
+                                max_tokens: 20
+                                tokens_per_fill: 10
+                                fill_interval: 1s
+                              filter_enabled:
+                                default_value:
+                                  numerator: 100
+                                  denominator: HUNDRED
+                              filter_enforced:
+                                default_value:
+                                  numerator: 100
+                                  denominator: HUNDRED
+
+                        ## ── Provider proxy ──────────────────────────
+                        ##  Catch-all: JSON-RPC over HTTP POST and
+                        ##  WebSocket upgrades. The Lua filter rewrites
+                        ##  :path onto the provider's /ethereum/<key>
+                        ##  endpoint (dRPC: one path for both transports);
+                        ##  this route only picks the cluster and the
+                        ##  Host header. `timeout: 0s` disables the
+                        ##  request timeout — WebSocket sessions and
+                        ##  slow archive queries both outlive any fixed
+                        ##  bound; the HCM stream_idle_timeout reaps
+                        ##  dead streams. Provider error responses pass
+                        ##  through unmodified (contract: rate limiting
+                        ##  must be observable from outside).
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: provider
+                            host_rewrite_literal: __BM_PROVIDER_HOST__
+                            timeout: 0s
+
+                http_filters:
+                  ## ── Attestation-scoped local rate limit ───────────
+                  ##  Declared with NO token_bucket at the listener
+                  ##  level, so globally it is a no-op: it rate-limits
+                  ##  ONLY the route that supplies its own token bucket
+                  ##  via typed_per_filter_config (the /attestation/
+                  ##  route above). The provider RPC route
+                  ##  carries no override, so RPC traffic is entirely
+                  ##  unaffected and the provider's own 429/limit
+                  ##  responses still pass through unmodified — the
+                  ##  registry load test depends on observing them. Must
+                  ##  precede the router filter.
+                  - name: envoy.filters.http.local_ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                      stat_prefix: http_local_rate_limiter
+                  ## ── Inbound node-secret auth + upstream rewrite ───
+                  ##  1. `/attestation/*` is UNAUTHENTICATED (public
+                  ##     attestation data): it is returned early, before
+                  ##     any bearer check, with the inbound Authorization
+                  ##     header stripped so a stray bearer never reaches
+                  ##     attestd. This lets the registry verify the
+                  ##     served RA-TLS cert before sending the secret.
+                  ##  2. For every other (RPC) path, enforce
+                  ##     `Authorization: Bearer <node secret>`. Dual
+                  ##     secrets: NODE_SECRET and NODE_SECRET_NEXT
+                  ##     (rotation). BOTH are read from the process
+                  ##     environment at request time with os.getenv —
+                  ##     never interpolated into this script as a string
+                  ##     literal — so a crafted secret value is opaque
+                  ##     data and cannot alter the auth logic. An
+                  ##     empty/absent secret is never accepted.
+                  ##  3. Strip the inbound Authorization header so the
+                  ##     node secret never reaches the upstream, then
+                  ##     rewrite :path onto the provider endpoint
+                  ##     /ethereum/<key> (dRPC uses the same path for
+                  ##     HTTP and WebSocket) with the operator's
+                  ##     PROVIDER_API_KEY percent-encoded as that path
+                  ##     segment (unreserved chars stay literal — dRPC
+                  ##     does not decode the segment). The key is read
+                  ##     from the process environment at request time; it
+                  ##     is never rendered into this file.
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          local function getenv(name)
+                            if os == nil or os.getenv == nil then
+                              return nil
+                            end
+                            return os.getenv(name)
+                          end
+
+                          -- Percent-encode every byte outside the RFC
+                          -- 3986 unreserved set [A-Za-z0-9-._~] so the
+                          -- operator API key cannot traverse the path,
+                          -- start a query string, or alter the request
+                          -- target. Unreserved punctuation stays LITERAL
+                          -- because dRPC does not percent-decode the key
+                          -- path segment (an escaped hyphen is rejected).
+                          -- Matches attestd's encode_api_key
+                          -- (API_KEY_ESCAPE_SET) so the proxied URL and
+                          -- the in-enclave probe URL resolve to the same
+                          -- upstream target. (Lua %w is alphanumeric
+                          -- only, so -._~ are listed explicitly.)
+                          local function url_encode(value)
+                            return (value:gsub("[^%w_%-%.~]", function(ch)
+                              return string.format("%%%02X", string.byte(ch))
+                            end))
+                          end
+
+                          function envoy_on_request(handle)
+                            local headers = handle:headers()
+                            local path = headers:get(":path") or ""
+                            local bare = path:match("^[^?]*") or ""
+
+                            -- /attestation/* is UNAUTHENTICATED: it
+                            -- serves only public attestation data (TDX
+                            -- quote, event log, signed public claims).
+                            -- Return it BEFORE the bearer check so the
+                            -- registry can capture + verify the served
+                            -- RA-TLS cert before it ever sends the node
+                            -- secret. Strip any inbound Authorization so
+                            -- a stray bearer never reaches attestd.
+                            if bare:sub(1, 13) == "/attestation/" then
+                              headers:remove("authorization")
+                              return
+                            end
+
+                            -- Every other path is RPC: require the
+                            -- node-secret bearer. Read the secrets as
+                            -- runtime DATA, not code.
+                            local secret = getenv("NODE_SECRET") or ""
+                            local secret_next = getenv("NODE_SECRET_NEXT") or ""
+                            local auth = headers:get("authorization") or ""
+                            local ok = false
+                            if secret ~= "" and auth == "Bearer " .. secret then
+                              ok = true
+                            elseif secret_next ~= "" and auth == "Bearer " .. secret_next then
+                              ok = true
+                            end
+                            if not ok then
+                              handle:respond(
+                                {[":status"] = "401",
+                                 ["content-type"] = "application/json"},
+                                "{\"error\":\"missing or invalid node secret\"}")
+                              return
+                            end
+                            -- The node secret never travels upstream.
+                            headers:remove("authorization")
+
+                            -- Rewrite onto the provider endpoint with the
+                            -- operator's API key. dRPC embeds the key as the
+                            -- final PATH segment (/ethereum/<key>) and uses the
+                            -- same path for HTTP JSON-RPC and WebSocket upgrades.
+                            -- The base path is fixed by the image; only the key
+                            -- value comes from the (unmeasured, CVM-encrypted)
+                            -- operator env.
+                            local key = url_encode(getenv("PROVIDER_API_KEY") or "")
+                            headers:replace(":path", "/ethereum/" .. key)
+                          end
+                  ## The router filter terminates the chain.
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+
+    ## ── Attestation server ──────────────────────────────────────────
+    ##  The co-located bm-tee-attestd process. It binds loopback only
+    ##  (127.0.0.1:8081 — see start.sh / BM_ATTESTD_BIND_ADDR); envoy is
+    ##  the only thing that reaches it. Plaintext HTTP/1.1 over loopback
+    ##  inside the TEE — the hop never leaves the container's network
+    ##  namespace.
+    - name: attestd
+      type: STATIC
+      connect_timeout: 5s
+      load_assignment:
+        cluster_name: attestd
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8081
+
+    ## ── Provider upstream ───────────────────────────────────────────
+    ##  The hardcoded RPC provider (dRPC ETH in this release).
+    ##  start.sh substitutes the host from its per-(chain, provider)
+    ##  allowlist. HTTP/1.1 upstream — required for WebSocket upgrade
+    ##  proxying; JSON-RPC POSTs ride the same protocol.
+    - name: provider
+      type: LOGICAL_DNS
+      connect_timeout: 10s
+      dns_lookup_family: V4_ONLY
+      load_assignment:
+        cluster_name: provider
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: __BM_PROVIDER_HOST__
+                      port_value: 443
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: __BM_PROVIDER_HOST__
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+              match_typed_subject_alt_names:
+                - san_type: DNS
+                  matcher:
+                    exact: __BM_PROVIDER_HOST__

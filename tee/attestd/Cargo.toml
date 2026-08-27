@@ -1,0 +1,68 @@
+[package]
+name = "bm-tee-attestd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "BlockMachine TEE proxy-miner attestation server — serves GET /attestation/info with a fresh TDX quote from the dstack guest agent plus in-enclave method-check results. Runs alongside Envoy inside the miner's TEE container."
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+panic_in_result_fn = "deny"
+unimplemented = "deny"
+allow_attributes = "deny"
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+await_holding_lock = "deny"
+large_futures = "deny"
+exit = "deny"
+mem_forget = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+
+[[bin]]
+name = "bm-tee-attestd"
+path = "src/main.rs"
+
+# One-shot RA-TLS certificate provisioner. start.sh runs it before
+# Envoy to mint the data-plane TLS cert via dstack's get_tls_key.
+[[bin]]
+name = "bm-tee-ratls"
+path = "src/bin/ratls.rs"
+
+[lib]
+name = "bm_tee_attestd"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+percent-encoding = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+dstack-sdk = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

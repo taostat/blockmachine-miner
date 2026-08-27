@@ -1,0 +1,92 @@
+{
+  "chain": "eth",
+  "expected_chain_id": "0x1",
+  "proof_depth_from_head": 8191,
+  "methods": [
+    {
+      "method": "eth_chainId",
+      "probe": "chain_id",
+      "params": [],
+      "required": true,
+      "capability": null
+    },
+    {
+      "method": "eth_blockNumber",
+      "probe": "liveness",
+      "params": [],
+      "required": true,
+      "capability": null
+    },
+    {
+      "method": "eth_getBlockByNumber",
+      "probe": "liveness",
+      "params": ["latest", false],
+      "required": true,
+      "capability": null
+    },
+    {
+      "method": "eth_getBlockByNumber",
+      "probe": "block_by_number",
+      "params": ["0xf4240", false],
+      "required": true,
+      "capability": "is_archive",
+      "expect": { "number": "0xf4240" }
+    },
+    {
+      "method": "eth_getBalance",
+      "probe": "archive_state",
+      "params": ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "0xf4240"],
+      "required": true,
+      "capability": "is_archive"
+    },
+    {
+      "method": "eth_getTransactionByHash",
+      "probe": "archive_tx",
+      "params": ["0xea1093d492a1dcb1bef708f771a99a96ff05dcab81ca76c31940300177fcf49f"],
+      "required": true,
+      "capability": "is_archive",
+      "expect": {
+        "hash": "0xea1093d492a1dcb1bef708f771a99a96ff05dcab81ca76c31940300177fcf49f",
+        "block_number_present": true
+      }
+    },
+    {
+      "method": "eth_getLogs",
+      "probe": "archive_logs",
+      "params": [
+        {
+          "fromBlock": "0xf42400",
+          "toBlock": "0xf42400",
+          "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        }
+      ],
+      "required": true,
+      "capability": "is_archive",
+      "expect": { "log_address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" }
+    },
+    {
+      "method": "eth_getProof",
+      "probe": "proof",
+      "params": ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", [], "__PROOF_BLOCK__"],
+      "required": true,
+      "capability": "serves_proofs"
+    },
+    {
+      "method": "trace_block",
+      "probe": "trace",
+      "params": ["0xf4240"],
+      "required": false,
+      "capability": "audit_compatible"
+    },
+    {
+      "method": "debug_traceTransaction",
+      "probe": "trace",
+      "params": [
+        "0xea1093d492a1dcb1bef708f771a99a96ff05dcab81ca76c31940300177fcf49f",
+        { "tracer": "callTracer" }
+      ],
+      "required": false,
+      "capability": "audit_compatible"
+    }
+  ]
+}

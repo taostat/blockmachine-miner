@@ -1,0 +1,89 @@
+## BlockMachine TEE proxy-miner compose template.
+##
+## Usage: the release tooling renders this file, substituting
+## BM_TEE_IMAGE_REF with the digest-pinned image reference and
+## __CHAIN__ / __PROVIDER__ with the target chain/provider slugs, then
+## submits it to Phala Cloud via `phala deploy`. Phala Cloud provisions
+## the TDX CVM and runs the KMS. The same rendering is reproduced
+## offline by tee/scripts/derive_compose_hash.py so the approved
+## compose_hash can be computed in CI and published to the registry's
+## /admin/tee-image-versions before release.
+##
+## CHAIN and PROVIDER are rendered literals, NOT operator env vars:
+## their values are substituted into the compose source before the file
+## is submitted. That makes them part of the attestation-measured
+## compose_hash, so a miner cannot change the targeted chain/provider
+## (and the hardcoded upstream URLs keyed off them inside the image)
+## without moving the compose_hash — which the registry's
+## tee_image_versions allowlist rejects.
+##
+## Operator env passthrough is exactly three variables — `phala deploy`
+## encrypts them client-side to the CVM key (unmeasured):
+##   - PROVIDER_API_KEY  — the operator's upstream provider API key.
+##   - NODE_SECRET       — enforced by envoy as `Authorization: Bearer`
+##                         on the proxied /rpc and /ws routes only;
+##                         /attestation/* is public (envoy strips any
+##                         inbound Authorization before the bearer check).
+##   - NODE_SECRET_NEXT  — optional second secret for rotation; both
+##                         are accepted while set (the dual-secret
+##                         pattern blockmachine-miner's nginx gateway
+##                         uses).
+##
+## The runtime is two co-located processes inside one container: envoy
+## (the data plane on :8080) and bm-tee-attestd (the TEE attestation
+## server + in-enclave method checker). The registry probes :8080 —
+## JSON-RPC for capability/liveness, and GET /attestation/info which
+## envoy routes to attestd. Registered endpoint: the Phala `-8080s`
+## TLS-passthrough URL (`https://<app-id>-8080s.<node>.phala.network`);
+## the dstack gateway forwards the raw TLS stream so envoy's in-enclave
+## RA-TLS certificate reaches the caller unmodified (the registry pins
+## its fingerprint; the BM gateway re-verifies the binding per
+## connection). The default `-8080` form would terminate TLS at the edge
+## and hide that binding — it must not be registered.
+##
+## dstack guest-agent socket: attestd calls the dstack guest agent's
+## get_key (the TEE-bound attestation keypair), get_quote / info, and
+## get_tls_key endpoints over /var/run/dstack.sock. dstack exposes the
+## socket on the CVM host but does not auto-mount it into app
+## containers, so the bind mount below is required — without it attestd
+## exits at startup and the container is restarted in a crash loop.
+
+services:
+  bm-tee-miner:
+    image: ${BM_TEE_IMAGE_REF:?BM_TEE_IMAGE_REF must be set (rendered with the pinned image digest)}
+    ports:
+      ## Envoy data plane — node-secret-gated JSON-RPC / WebSocket
+      ## proxying to the hardcoded provider upstream, plus the
+      ## registry's GET /attestation/info attestation probes.
+      - "8080:8080"
+    environment:
+      ## Operator-supplied, encrypted client-side to the CVM key by
+      ## `phala deploy`. Unmeasured — only the names appear in the
+      ## measured allowed_envs list, never the values.
+      - PROVIDER_API_KEY
+      - NODE_SECRET
+      - NODE_SECRET_NEXT
+      ## Target chain/provider — rendered literals (not operator env
+      ## vars), so the values are part of the attestation-measured
+      ## compose_hash. The image's start.sh and attestd both refuse to
+      ## start on combinations they do not hardcode.
+      - CHAIN=__CHAIN__
+      - PROVIDER=__PROVIDER__
+    volumes:
+      ## dstack guest-agent socket. attestd calls get_key (TEE-bound
+      ## keypair), get_quote (fresh TDX quote), info() (CVM
+      ## measurements), and bm-tee-ratls calls get_tls_key over this
+      ## socket. dstack does not auto-mount it into app containers.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ## File-descriptor limit. Envoy is the data plane: every downstream
+    ## connection and every upstream connection it opens consumes a
+    ## file descriptor. 65536 gives a multi-thousand-connection budget;
+    ## the overload-manager connection ceiling in image/envoy.yaml is
+    ## set well under half this value, per Envoy's fd-sizing guidance.
+    ## Declared here so it is part of the attestation-measured compose
+    ## hash.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
