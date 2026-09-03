@@ -120,80 +120,73 @@ formatting quirk.
 
 Eligibility (see *Node Eligibility Requirements*) decides whether a node serves what the chain
 requires. **Capacity testing decides how much traffic an eligible node deserves.** It measures
-the real hardware behind a node under sustained load and produces a score that scales the
-node's routing weight — so operators who invest in genuinely strong hardware receive more
-requests and more incentive, because they have earned it.
+the hardware behind a node under a sudden heavy load and turns that into a multiplier on the
+node's routing weight. Operators who run genuinely strong hardware receive more requests and
+more incentive; operators who run many small boxes do not.
 
 ### What we measure
 
-We load your node with **heavy, real workloads** — the same class of expensive questions
-paying customers actually ask — at increasing levels of concurrency, and we measure what
-happens. For archive nodes that means archive-depth workloads. Full nodes are capacity-tested
-too, on what full nodes are expected to serve — head and recent-range traffic within their
-retention window; a full node is never graded on archive-depth questions.
+We take your node out of customer routing for a moment and fire **a large burst of heavy
+requests at it all at once**: hundreds of full block traces of expensive blocks, the kind of
+work paying customers actually ask for. Then we run the clock on every one of them:
 
-- **Sustained latency under load**, not idle latency. A fast answer to a single request tells
-  us about a disk seek; what we score is how the node behaves when many expensive requests
-  arrive at once.
-- **Degradation**: the ratio between your node's performance at rest and under load. Strong
-  hardware degrades gracefully; overcommitted hardware collapses.
-- **Completion**: whether requests under load are answered at all, or start failing.
+- A correct answer costs the seconds it took to come back.
+- An error, a malformed or incorrect answer, or anything slower than 10 seconds costs a flat
+  20 seconds.
 
-Every run is **internally calibrated**: the scale is set by control measurements taken in the
-same run, under the same conditions as yours — never by an abstract number. Runs are repeated,
-and a run that could not measure your node fairly (a problem on our side, chain conditions)
-writes **no score** — an inconclusive run never harms you.
+The total is your score for the burst. **Lower is better.** We run three bursts on three
+different sets of blocks and take the mean.
+
+Archive nodes are asked deep historical blocks, the same blocks for every archive node on the
+chain in that run, so results compare like for like. Full nodes are asked the newest blocks at
+the moment of the test, all full nodes on the chain at the same time, and "correct" is what the
+majority of well-formed answers agreed on.
 
 ### What the score does
 
-- The score multiplies your node's routing weight on that chain. Higher score → larger share
-  of traffic → larger share of incentive.
-- Scores come with a written reason you can read: what was measured, against what bar, and
-  which axis set your score.
-- Scores are replaced by newer runs; they do not silently decay. A hardware upgrade shows up
-  the next time you are measured.
-- A node that has **never been measured** on a chain where scoring is armed is not routed
-  premium traffic until its first measurement — new nodes are measured with priority, so this
-  window is short.
+Your multiplier is your score against the best score on the chain in that run, **squared**:
+
+```
+multiplier = (best score ÷ your score)²
+```
+
+The fastest node on the chain gets 1.0. A node twice as slow gets 0.25, not 0.5. A node that
+refuses or times out on half of a burst pays 20 seconds for every one of those requests and
+ends up near zero. This is deliberate: the multiplier concentrates traffic on the nodes that
+can take a surge and answer it fast, and stops a fleet of small, slow boxes earning by numbers
+what none of them earns by quality. Ten weak nodes are ten small multipliers, not one big one.
+
+- The multiplier scales your node's routing weight on that chain. Higher multiplier, larger
+  share of traffic and incentive.
+- Scores are replaced by newer runs; they do not decay. A hardware upgrade shows up the next
+  time you are measured.
+- A run that could not measure your node fairly (a problem on our side, chain conditions)
+  writes no score. An inconclusive run never harms you.
+- Operators running nodes on several chains can expect those nodes to be tested **at the same
+  moment**. Nodes that share one machine slow down together, and the scores will say so.
 
 ### What we deliberately do not publish
 
-We do not publish the exact probe methods, the block ranges, the concurrency ladder, the
-scoring thresholds, or the run schedule — and we change them. This is not secrecy for its own
-sake; every detail we publish becomes a thing to tune for instead of a thing to be. The
-properties below are what make the test ungameable, and these we publish proudly:
+The burst size, the block selection, the exact request mix and the run schedule, and we change
+them. Every published detail becomes a thing to tune for instead of a thing to be. What we do
+publish are the properties that make the test fair:
 
-- **No question is ever asked twice.** Every request in every run uses fresh, randomly chosen
-  targets, disjoint across nodes and across runs. Caches, canned answers and precomputation do
-  not help. The only way to answer fast is to be able to answer fast.
-- **The workload is genuinely heavy.** Cheap point-reads that a hot cache can serve in a
-  millisecond are not what we score. The probes cost real IO and real computation, the way
-  real archive traffic does.
-- **The test rides the same connection as customer traffic.** There is no separate "test
-  endpoint" to special-case.
-- **Every run carries its own controls, run through the same gauntlet.** If chain conditions
-  make a run unfair, the controls show it, and the run is discarded.
-
-### Rules for operators
-
-1. **Do not rate-limit, deprioritise, or divert gateway traffic.** The gateway connection is
-   the product: what your node serves through it *is* your capacity, and it is the only thing
-   we can fairly measure. If your infrastructure treats our load differently from customer
-   load — shaping it, shedding it, routing it to a different tier — your score will reflect
-   the degraded path you gave us, and that is the score that stands. If you believe a
-   measurement misrepresents you, raise it: every score carries its reasons, and runs can be
-   re-taken. But the fix is to serve the traffic, not to shape it.
-2. **Proxying to shared or resold capacity shows up.** Multiple registered nodes backed by one
-   pool of hardware degrade together under simultaneous load, and the scores will say so.
-3. **Fronting caches show up.** See "no question is ever asked twice."
+- **The same questions for every node in a run**, fresh blocks every run, never the same block
+  twice to the same node. Caches and canned answers do not help.
+- **The workload is genuinely heavy.** Full traces of large blocks, not point reads a hot cache
+  serves in a millisecond. A connection cap or a request limit in front of your node turns
+  refused requests into 20-second penalties; the only way to score is to serve the burst.
+- **The test hits the endpoint you registered.** There is no separate test endpoint to
+  special-case, and the burst arrives with your node drained of customer traffic, so it
+  measures your node and nothing else.
 
 ### Fairness commitments
 
-- You are only ever scored against measurements taken from your own node, calibrated within
-  the run they came from.
+- Every node on a chain is measured on the same questions in the same run.
 - Inconclusive measurements never lower a score.
 - Scores, reasons and measurement times are visible to you.
-- Methodology changes are published before they change anyone's routing.
+- Methodology changes are published before they change anyone's routing. This section is that
+  publication for the burst test.
 
 ## Getting started
 
