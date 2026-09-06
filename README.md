@@ -144,17 +144,16 @@ majority of well-formed answers agreed on.
 
 ### What the score does
 
-Your multiplier is your score against the best score on the chain in that run, **squared**:
+Your multiplier is your score against the best score on the chain in that run:
 
 ```
-multiplier = (best score ÷ your score)²
+multiplier = best score ÷ your score
 ```
 
-The fastest node on the chain gets 1.0. A node twice as slow gets 0.25, not 0.5. A node that
-refuses or times out on half of a burst pays 20 seconds for every one of those requests and
-ends up near zero. This is deliberate: the multiplier concentrates traffic on the nodes that
-can take a surge and answer it fast, and stops a fleet of small, slow boxes earning by numbers
-what none of them earns by quality. Ten weak nodes are ten small multipliers, not one big one.
+The fastest node on the chain gets 1.0. A node twice as slow gets 0.5. A node that refuses or
+times out on half of a burst pays 20 seconds for every one of those requests and ends up near
+zero. The multiplier concentrates traffic on the nodes that can take a surge and answer it
+fast: a fleet of small, slow boxes earns by quality, not by numbers.
 
 - The multiplier scales your node's routing weight on that chain. Higher multiplier, larger
   share of traffic and incentive.
