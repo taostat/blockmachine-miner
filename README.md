@@ -64,8 +64,11 @@ A node declared **archive** must serve **state and blocks all the way back to ge
 
 A node declared **full** must serve the chain head and the recent range correctly:
 
-- Full blocks and state for at least the **last 100 blocks**. (This floor will be configured
-  individually per chain in the near future; changes are published before they apply.)
+- Full blocks and state for at least the **last 100 blocks**, except where a chain sets its own
+  floor (below). Changes are published here before they apply.
+  - **Robinhood Chain: the last 5,000 blocks.** Robinhood makes a block every 100 ms, so 100
+    blocks is ten seconds of history; 5,000 blocks (about eight minutes) is the floor a full
+    node must serve. Applies from the eligibility run after this note is published.
 - All universal requirements above.
 - A full node is never asked archive-depth questions and is never penalised for honestly being
   a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
