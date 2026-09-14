@@ -51,16 +51,17 @@ nodes on other chains.
 
 ### Archive node requirements
 
-A node declared **archive** must serve **state, blocks and transaction lookups all the way back
-to genesis**: any transaction in any block must be retrievable by its hash, and so must its
-receipt.
+A node declared **archive** must serve **blocks, state, traces (where the chain requires them)
+and transaction lookups all the way back to genesis**: any transaction in any block must be
+retrievable by its hash, and so must its receipt.
 
-- Verified by random sampling: we ask for full blocks, state reads, transaction lookups by hash
-  (and their receipts) and (where the chain's clients support it) traces at randomly chosen
-  historical heights across the entire chain history. There is no depth that is safe to prune.
-- Geth-family clients (including bor) prune the transaction index by default. Run with
-  `--history.transactions=0` (geth 1.14 and later) or `--txlookuplimit=0` (older geth, bor) so
-  every transaction stays retrievable by hash.
+- Verified by random sampling: we ask for full blocks, state reads and (where the chain's
+  clients support it) traces at randomly chosen historical heights across the entire chain
+  history. There is no depth that is safe to prune.
+- Geth-family clients (geth, bor and their forks) keep only a recent transaction index unless
+  told otherwise: `--history.transactions=0` (geth 1.14 and later) or `--txlookuplimit=0`
+  (older geth, bor) keeps every transaction retrievable by hash. Geth sets this itself under
+  `--gcmode=archive`; check that your client and mode do the same.
 - The samples are never announced in advance and never reused, so there is nothing to warm and
   nothing to precompute. The only way to pass is to hold the data.
 - An archive node must also serve everything a full node serves.
