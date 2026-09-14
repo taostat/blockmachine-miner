@@ -69,6 +69,9 @@ A node declared **full** must serve the chain head and the recent range correctl
   - **Robinhood Chain: the last 5,000 blocks.** Robinhood makes a block every 100 ms, so 100
     blocks is ten seconds of history; 5,000 blocks (about eight minutes) is the floor a full
     node must serve. Applies from the eligibility run after this note is published.
+  - **Polygon: the last 250 blocks.** Polygon makes a block every 2 seconds, so 100 blocks is
+    three minutes of history; 250 blocks (about eight minutes) is the floor a full node must
+    serve. Applies from the eligibility run after this note is published.
 - All universal requirements above.
 - A full node is never asked archive-depth questions and is never penalised for honestly being
   a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
