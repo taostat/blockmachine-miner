@@ -79,6 +79,14 @@ A node declared **full** must serve the chain head and the recent range correctl
   - **Polygon: the last 250 blocks.** Polygon makes a block every 2 seconds, so 100 blocks is
     three minutes of history; 250 blocks (about eight minutes) is the floor a full node must
     serve. Applies from the eligibility run after this note is published.
+  - **Ethereum: the last 10,000 blocks.** This is not a new demand on your hardware: it is
+    what reth `--minimal` and erigon `--prune.distance=10064` already retain by default, less
+    a small safety margin, and it is the depth the gateway has always routed to non-archive
+    ETH backends. Stating it here makes the published floor match what we actually ask for —
+    previously the document said 100 while registration required 10,000, so a node built
+    exactly to this page could be refused and not told why. Every ETH full node currently
+    registered already meets it. Applies from the eligibility run after this note is
+    published.
 - All universal requirements above.
 - A full node is never asked archive-depth questions and is never penalised for honestly being
   a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
