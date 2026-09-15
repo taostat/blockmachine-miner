@@ -43,7 +43,7 @@ nodes on other chains.
 | U1 | **Correct chain** | `eth_chainId` (or the substrate genesis hash on TAO) matches the chain you registered the node on. |
 | U2 | **Honest node type** | You declare `archive` or `full`. The declaration is verified (see below). Claiming archive without archive state is an eligibility failure, not a scoring nuance. |
 | U3 | **Reachable as registered** | The exact endpoint URL you registered must accept WebSocket connections and answer JSON-RPC on it. If your endpoint lives under a path, register the URL **with** the path. We test what you registered, not what you meant. |
-| U4 | **At the tip** | The node tracks the chain head. A node that persistently lags the network tip is not serving the chain. |
+| U4 | **At the tip** | The node tracks the chain head. It must stay within **90 seconds of chain progress** of the highest head we can see on that chain — see *Staying at the tip* below for the per-chain block allowance. A node that persistently lags the network tip is not serving the chain. |
 | U5 | **Standard responses** | Correct JSON-RPC 2.0 shapes, including on errors. Proxies that return HTML error pages, rewrite error codes, or inject non-standard responses fail this. |
 | U6 | **Standard subscriptions** | `eth_subscribe(["newHeads"])` (or substrate equivalent) must work and actually deliver notifications. |
 | U7 | **Consistent identity** | `web3_clientVersion` reports a real client honestly, matching the chain's accepted-client list (enforced at registration and re-checked continuously). Masking what you run is an eligibility failure. Known exception: Avalanche's coreth reports a bare version string with no client name, so Avalanche uses chain-ID + behaviour checks instead of a name match — an honest coreth node is never failed for its client string. |
@@ -107,6 +107,45 @@ A node declared **full** must serve the chain head and the recent range correctl
 the block's state root — no comparison node, no trust. Where the chain's clients emit proofs,
 we verify them, and a proof that does not check out is treated as a wrong answer, not a
 formatting quirk.
+### Staying at the tip
+
+Your node must stay within **90 seconds of chain height**. We do not ask your node
+where the chain head is and measure back from there — a node that has stopped
+following the chain would pass that test forever, answering questions about its own
+frozen head. We compare your node's head against the **highest head we can see
+across all nodes on that chain**.
+
+Ninety seconds is the same allowance everywhere. The block count differs only
+because the chains run at different speeds:
+
+| Chain | Full node | Archive node |
+|---|---|---|
+| **Ethereum** (`eth`) | 9 blocks | 55 blocks |
+| **BSC** (`bsc`) | 208 | 1,385 |
+| **Base** (`base`) | 46 | 305 |
+| **Optimism** (`optimism`) | 48 | 320 |
+| **Polygon** (`polygon`) | 63 | 415 |
+| **Avalanche C-Chain** (`avalanche`) | 93 | 615 |
+| **Scroll** (`scroll`) | 90 | 595 |
+| **Mantle** (`mantle`) | 48 | 315 |
+| **Arbitrum One** (`arbitrum`) | 378 | 2,515 |
+| **Robinhood Chain** (`robinhood`) | 972 | 6,475 |
+| **TAO (Bittensor)** (`tao`) | 8 | 50 |
+
+- **Archive nodes get ten minutes, not ninety seconds.** An archive node that is
+  behind is usually behind because it is doing expensive historical work, which is
+  the job we are paying it for.
+- **The allowances are sized from the fastest we have ever seen each chain run.**
+  Several chains routinely beat their own published block time, so sizing from the
+  documented figure would quietly make the rule stricter than ninety seconds. This
+  way ninety seconds is a floor: when a chain is running slowly, the same block
+  count buys you more time, never less.
+- **Falling behind is treated as temporary**, and is retried before anything is
+  flagged (see *How testing works*). A node catching up after a restart is not a
+  node that has failed.
+- These numbers change only when a chain changes its block speed, and any change is
+  published here before it applies.
+
 ### How testing works
 
 - Every node is re-tested **regularly and automatically**. Tests are randomly timed; there is
