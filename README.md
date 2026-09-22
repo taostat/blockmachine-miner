@@ -97,13 +97,18 @@ A node declared **full** must serve the chain head and the recent range correctl
     published.
 - **Logs are included in that range.** On every EVM chain `eth_getLogs` must answer for any
   block inside your node's floor above, and the log index is pruned with the receipt data
-  (see the archive section for the client settings that govern it). You are never asked for
-  logs older than the floor your node's class and chain publish. Applies from the eligibility
-  run after this note is published.
+  (see the archive section for the client settings that govern it). Applies from the
+  eligibility run after this note is published.
+- **Your floor is what you must hold. It is not a cap on what you may be sent.** Requests for
+  blocks, logs, receipts or transactions older than your floor can reach a full node. You are
+  never required to hold more than your floor, and not answering one of them is not an
+  eligibility failure: eligibility is judged against your floor and nothing deeper. A node
+  that keeps more history than its floor will be sent more of this work. Applies from the
+  eligibility run after this note is published.
 - All universal requirements above.
-- A full node is never asked archive-depth questions and is never penalised for honestly being
-  a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
-  while serving full is not.
+- **Eligibility never asks a full node an archive-depth question**, and a node is never
+  penalised for honestly being a full node. Declaring `full` while actually serving archive
+  is fine; declaring `archive` while serving full is not.
 
 ### Per-chain requirements
 
