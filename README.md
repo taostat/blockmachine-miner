@@ -51,9 +51,10 @@ nodes on other chains.
 
 ### Archive node requirements
 
-A node declared **archive** must serve **blocks, state, traces (where the chain requires them)
-and transaction lookups all the way back to genesis**: any transaction in any block must be
-retrievable by its hash, and so must its receipt.
+A node declared **archive** must serve **blocks, state, logs, traces (where the chain requires
+them) and transaction lookups all the way back to genesis**: any transaction in any block must
+be retrievable by its hash, so must its receipt, and so must the events that transaction
+emitted.
 
 - Verified by random sampling: we ask for full blocks, state reads and (where the chain's
   clients support it) traces at randomly chosen historical heights across the entire chain
@@ -62,6 +63,13 @@ retrievable by its hash, and so must its receipt.
   told otherwise: `--history.transactions=0` (geth 1.14 and later) or `--txlookuplimit=0`
   (older geth, bor) keeps every transaction retrievable by hash. Geth sets this itself under
   `--gcmode=archive`; check that your client and mode do the same.
+- **Logs are pruned with the receipts.** On every EVM chain the log index lives with the
+  receipt data, so the setting that decides how much receipt history your client keeps also
+  decides how far back `eth_getLogs` will answer: `--prune.receipts` on reth,
+  `--prune.distance` on erigon, `--gcmode=archive` on geth-family clients. Keeping block
+  bodies is not enough. An archive node must answer `eth_getLogs` for any block in the chain's
+  history, not only for recent ones. Applies from the eligibility run after this note is
+  published.
 - The samples are never announced in advance and never reused, so there is nothing to warm and
   nothing to precompute. The only way to pass is to hold the data.
 - An archive node must also serve everything a full node serves.
@@ -70,9 +78,9 @@ retrievable by its hash, and so must its receipt.
 
 A node declared **full** must serve the chain head and the recent range correctly:
 
-- Full blocks, state and transaction lookups by hash (with their receipts) for at least the
-  **last 100 blocks**, except where a chain sets its own floor (below). Changes are published
-  here before they apply.
+- Full blocks, state, logs and transaction lookups by hash (with their receipts) for at least
+  the **last 100 blocks**, except where a chain sets its own floor (below). Changes are
+  published here before they apply.
   - **Robinhood Chain: the last 5,000 blocks.** Robinhood makes a block every 100 ms, so 100
     blocks is ten seconds of history; 5,000 blocks (about eight minutes) is the floor a full
     node must serve. Applies from the eligibility run after this note is published.
@@ -87,6 +95,11 @@ A node declared **full** must serve the chain head and the recent range correctl
     exactly to this page could be refused and not told why. Every ETH full node currently
     registered already meets it. Applies from the eligibility run after this note is
     published.
+- **Logs are included in that range.** On every EVM chain `eth_getLogs` must answer for any
+  block inside your node's floor above, and the log index is pruned with the receipt data
+  (see the archive section for the client settings that govern it). You are never asked for
+  logs older than the floor your node's class and chain publish. Applies from the eligibility
+  run after this note is published.
 - All universal requirements above.
 - A full node is never asked archive-depth questions and is never penalised for honestly being
   a full node. Declaring `full` while actually serving archive is fine; declaring `archive`
