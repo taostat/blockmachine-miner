@@ -95,16 +95,29 @@ A node declared **full** must serve the chain head and the recent range correctl
     exactly to this page could be refused and not told why. Every ETH full node currently
     registered already meets it. Applies from the eligibility run after this note is
     published.
+  - **Avalanche C-Chain: two different numbers, because your node keeps two different
+    things.** State — balances, `eth_call`, `debug_traceCall` and the other reads that need
+    the historical state trie — stays at **the last 100 blocks**, which is what a default
+    avalanchego node retains. History — full blocks, receipts, logs and transaction lookups
+    by hash — is **the last 100,000 blocks**, a little over a day at Avalanche's block
+    time. Avalanche is the only chain where the two are published separately, because on
+    this chain they are genuinely far apart: a default node prunes the state trie within a
+    few hundred blocks while keeping block bodies, receipts and the log index for millions.
+    Every Avalanche full node registered today already serves blocks, receipts, logs and
+    transaction lookups around twenty times deeper than this floor. Applies from the
+    eligibility run after this note is published.
 - **Logs are included in that range.** On every EVM chain `eth_getLogs` must answer for any
   block inside your node's floor above, and the log index is pruned with the receipt data
   (see the archive section for the client settings that govern it). Applies from the
   eligibility run after this note is published.
-- **Your floor is what you must hold. It is not a cap on what you may be sent.** Requests for
-  blocks, logs, receipts or transactions older than your floor can reach a full node. You are
-  never required to hold more than your floor, and not answering one of them is not an
-  eligibility failure: eligibility is judged against your floor and nothing deeper. A node
-  that keeps more history than its floor will be sent more of this work. Applies from the
-  eligibility run after this note is published.
+- **Your floor is what we send you, and eligibility asks for no more than it.** Requests for
+  blocks, logs, receipts and transactions older than your chain's history floor go to archive
+  nodes, not to full nodes, so a full node is not sent historical work it never promised. You
+  are never required to hold more than your floor, and eligibility is judged against your
+  floor and nothing deeper. If your chain's full nodes hold much more history than the floor
+  says — as Avalanche's do — tell us: the way that work reaches you is a deeper published
+  floor for that chain, which we measure against the nodes actually registered before we
+  publish it. Applies from the eligibility run after this note is published.
 - All universal requirements above.
 - **Eligibility never asks a full node an archive-depth question**, and a node is never
   penalised for honestly being a full node. Declaring `full` while actually serving archive
