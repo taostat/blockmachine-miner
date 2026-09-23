@@ -268,6 +268,41 @@ publish are the properties that make the test fair:
 - Methodology changes are published before they change anyone's routing. This section is that
   publication for the burst test.
 
+## Base incentive
+
+Alongside what the network pays you for the traffic you serve, each chain has a **base
+incentive** — a separate payment shared out among the miners serving that chain. Part of each
+chain's base incentive is set aside for its archive nodes. The rule below is about that
+archive part, and it changes nothing about the rest.
+
+**The archive part is paid to the five archive nodes on each chain that served the most
+traffic.** On every chain, the eligible archive nodes that served the most traffic in an epoch
+are ranked, and the top five share that chain's archive base incentive in proportion to the
+traffic each of them served — a node's share is its traffic as a fraction of the traffic
+served by those five, not by the whole field. An archive node outside the top five on a chain
+receives no archive base incentive on that chain for that epoch.
+
+**You are still paid for every request you serve.** Base incentive is separate from, and
+additional to, what the network pays you for traffic. Falling outside the top five does not
+reduce what your served traffic earns, and it does not affect your eligibility, your routing,
+or any other chain you run a node on.
+
+An archive node outside the five still shares in the rest of the chain's base incentive for
+the recent-block traffic it serves, exactly as before.
+
+The ranking is redone every epoch, so a node can enter or leave the top five from one epoch to
+the next.
+
+We are making this change because fewer high capacity miners provides more stability for the
+product.
+
+Each chain is counted on its own. Being outside the five on one chain says nothing about where
+you stand on another, and on a chain with five or fewer eligible archive nodes every one of
+them is inside the five.
+
+**This applies from the epoch of 24 September 2026.** As with the burst test above, it is
+published before it applies.
+
 ## Getting started
 
 **You bring the node.** Provisioning, syncing, disk sizing and snapshots are your
