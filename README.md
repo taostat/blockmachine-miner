@@ -3,6 +3,7 @@
 - [How it works](#how-it-works)
 - [Node Eligibility Requirements](#node-eligibility-requirements)
 - [Capacity Testing](#capacity-testing)
+- [Base Incentive](#base-incentive)
 - [Getting started](#getting-started)
 - [Pricing](#pricing)
 - [TLS options](#tls-options)
@@ -271,8 +272,8 @@ publish are the properties that make the test fair:
 ## Base incentive
 
 Alongside what the network pays you for the traffic you serve, each chain has a **base
-incentive** — a separate payment shared out among the miners serving that chain. Part of each
-chain's base incentive is set aside for its archive nodes. The rule below is about that
+incentive** — a separate payment shared out among the miners serving that chain. 90% of each
+chain's base incentive is set aside for its archive nodes, 10% for the lite nodes. The rule below is about that
 archive part, and it changes nothing about the rest.
 
 **The archive part is paid to the five archive nodes on each chain that served the most
@@ -299,9 +300,6 @@ product.
 Each chain is counted on its own. Being outside the five on one chain says nothing about where
 you stand on another, and on a chain with five or fewer eligible archive nodes every one of
 them is inside the five.
-
-**This applies from the epoch of 24 September 2026.** As with the burst test above, it is
-published before it applies.
 
 ## Getting started
 
