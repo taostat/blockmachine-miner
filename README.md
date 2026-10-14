@@ -209,37 +209,55 @@ more incentive; operators who run many small boxes do not.
 
 ### What we measure
 
-We take your node out of customer routing for a moment and fire **a large burst of heavy
-requests at it all at once**: hundreds of full block traces of expensive blocks, the kind of
-work paying customers actually ask for. Then we run the clock on every one of them:
+We take your node out of customer routing for a moment and fire **a burst of requests at it
+all at once**, the kind of work paying customers actually ask for, in four kinds:
 
-- A correct answer costs the seconds it took to come back.
-- An error, a malformed or incorrect answer, or anything slower than 10 seconds costs a flat
-  20 seconds.
+| Workload | EVM chains | Weight | Tao | Weight |
+|---|---|---|---|---|
+| State | balances, nonces, storage, code and contract calls at old blocks | 15% | storage values at old blocks | 30% |
+| Heavy | traces of transactions and calls | 35% | pages of storage, key listings and runtime calls | 40% |
+| Indexed | log queries, receipts and transaction lookups | 35% | a block's events and block hashes | 20% |
+| Block | blocks and headers | 15% | blocks and headers | 10% |
 
-The total is your score for the burst. **Lower is better.** We run three bursts on three
-different sets of blocks and take the mean.
+Each workload's questions are sent together, over many connections at once, and the clock
+runs from the first question sent to the last correct answer received:
 
-Archive nodes are asked deep historical blocks, the same blocks for every archive node on the
-chain in that run, so results compare like for like. Full nodes are asked the newest blocks at
-the moment of the test, all full nodes on the chain at the same time, and "correct" is what the
-majority of well-formed answers agreed on.
+- A correct answer inside the time limit counts the time it took.
+- An error, a malformed or incorrect answer, no answer, a refused connection, or an answer
+  that arrives after the limit costs a flat charge of **twice the limit**. The limit is
+  10 seconds for heavy work and for log queries on EVM chains, and 2 seconds for everything
+  else. A late answer is never cheaper than no answer, and no answer is never cheaper than
+  answering in time.
+
+**Lower is better.** Every question names the block it is about. The questions are standard
+read calls in many different shapes, drawn fresh for every run, so that what is measured is a
+node serving real requests rather than a node prepared for one particular request.
+
+Archive nodes are asked about historical blocks, the same questions for every archive node on
+the chain in that run, so results compare like for like, and every answer must be exactly
+right. Full nodes are asked about the newest blocks at the moment of the test, all full nodes
+on the chain at the same time.
 
 ### What the score does
 
-Your multiplier is your score against the best score on the chain in that run:
+For each workload, your multiplier is the best time on the chain against yours, capped at 1:
 
 ```
-multiplier = best score ÷ your score
+workload multiplier = best time ÷ your time      (at most 1.0)
+score               = the four workload multipliers, weighted by the table above
 ```
 
-The fastest node on the chain gets 1.0. A node twice as slow gets 0.5. A node that refuses or
-times out on half of a burst pays 20 seconds for every one of those requests and ends up near
-zero. The multiplier concentrates traffic on the nodes that can take a surge and answer it
-fast: a fleet of small, slow boxes earns by quality, not by numbers.
+The fastest node on a workload gets 1.0 for it. A node twice as slow gets 0.5. A node that
+refuses or times out on half of a burst pays the flat charge for every one of those requests
+and ends up near zero on that workload. The score concentrates traffic on the nodes that can
+take a surge and answer it fast: a fleet of small, slow boxes earns by quality, not by numbers.
 
-- The multiplier scales your node's routing weight on that chain. Higher multiplier, larger
-  share of traffic and incentive.
+A node that gets not one question right on a workload, or that advertises archive and cannot
+answer archive questions, scores zero: that is a statement about what data it holds, not about
+how fast it is.
+
+- The score scales your node's routing weight on that chain. Higher score, larger share of
+  traffic and incentive.
 - Scores are replaced by newer runs; they do not decay. A hardware upgrade shows up the next
   time you are measured.
 - A run that could not measure your node fairly (a problem on our side, chain conditions)
@@ -249,20 +267,51 @@ fast: a fleet of small, slow boxes earns by quality, not by numbers.
 
 ### What we deliberately do not publish
 
-The burst size, the block selection, the exact request mix and the run schedule, and we change
-them. Every published detail becomes a thing to tune for instead of a thing to be. What we do
-publish are the properties that make the test fair:
+Which blocks are chosen and how, the exact questions in a run, how answers are checked, and
+the run schedule, and we change them. Every published detail becomes a thing to tune for
+instead of a thing to be. What we do publish is how you are marked (above) and the properties
+that make the test fair:
 
 - **The same questions for every node in a run**, fresh blocks every run, never the same block
   twice to the same node. Caches and canned answers do not help.
-- **The workload is genuinely heavy.** Full traces of large blocks, not point reads a hot cache
-  serves in a millisecond. A connection cap or a request limit in front of your node turns
-  refused requests into 20-second penalties; the only way to score is to serve the burst.
+- **The workload is genuinely heavy.** Traces, historical state and log queries, not point
+  reads a hot cache serves in a millisecond. A connection cap or a request limit in front of
+  your node turns refused requests into flat charges; the only way to score is to serve the
+  burst.
 - **The test hits the endpoint you registered**, and the burst arrives with your node drained
   of customer traffic, so it measures your node and nothing else. You may also run the optional
   [capacity helper](#capacity-helper-optional-archive-nodes) at `/capacity-test` on that same
   endpoint; it changes how much of an answer crosses the internet, never which questions are
   asked or how they are marked.
+- **Distance from us is not scored.** Every connection is warmed with unscored reads before
+  the questions go out, and one round trip between our tester and your node is taken off each
+  workload's time.
+
+### Run the test yourself
+
+For an archive node you can download the questions from our last run on your chain, with the
+correct answers and the times the field managed, and put them to your own node as often as you
+like. Nothing it measures reaches us or changes your score.
+
+```bash
+bm miner capacity-pack --chain eth
+unzip capacity-test-eth.zip && cd capacity-test
+./run ws://your-node:8545
+```
+
+The zip carries the test program, `capacity-replay`. It is also published with each
+[release](https://github.com/taostat/blockmachine-miner/releases/latest) as
+`capacity-replay-linux-x86_64`, for running a pack you already have:
+
+```bash
+capacity-replay --pack pack.json --url ws://127.0.0.1:8545 --label "my node"
+```
+
+Your number will not match ours exactly: we measure your node through its registration with
+it out of customer traffic, and this measures it directly, while it serves. A pack is a record
+of a run that has already happened; every real run draws fresh questions, so practising
+against it gains nothing. Full nodes have no pack, because their questions are the newest
+blocks at the moment of the test.
 
 ### Fairness commitments
 
@@ -425,6 +474,19 @@ extra cost of carrying large answers over distance.
    either `ok` or what is wrong. If your endpoint serves its own certificate, it prints that
    certificate's fingerprint and the command to run pinned to it.
 
+
+### Keep it up to date
+
+Check which version you run with `capacity-helper --version`. **Run 0.3.0 or later.** An older
+helper cannot take part in the current test: our tester finds that out before the test starts
+and tests your node directly, so it costs you nothing, but it also gives you none of the
+helper's benefit. Version 0.1.0, from the first release, is too old on every chain; 0.2.0 is
+too old on Tao. Once you have the new file, `capacity-helper check` warns you if the helper
+answering on your endpoint is still an old one.
+
+To upgrade, download and install the new file exactly as in step 1, then restart the helper
+(`sudo systemctl restart capacity-helper` if you use the systemd unit). Your settings do not
+change.
 
 ### What happens if the helper is down or misconfigured
 
