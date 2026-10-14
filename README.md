@@ -133,6 +133,14 @@ A node declared **full** must serve the chain head and the recent range correctl
 
 **Why Base has no mempool requirement.** Base's sequencer is private: public nodes cannot observe a meaningful pending-transaction feed, so there is nothing a node could serve and nothing we could fairly measure. Mempool is therefore not required on Base (same as the other chains marked ❌).
 
+**Base requires Flashblocks.** Every Base node, full or archive, must have Flashblocks enabled, so that customers can use the `newFlashblocks` and `pendingLogs` subscriptions. A Base node without Flashblocks is not eligible. On the official Base node image (`ghcr.io/base/node`), set this environment variable on the execution client and restart it:
+
+```
+RETH_FB_WEBSOCKET_URL=wss://mainnet.flashblocks.base.org/ws
+```
+
+That is Base's public mainnet Flashblocks feed and needs no key. If you start `base-reth-node` yourself, pass the same URL with `--flashblocks-url`. Once the node is up, its log shows `Starting Flashblocks RPC`, and an `eth_subscribe` to `newFlashblocks` over WebSocket returns a subscription id and then streams updates several times a second.
+
 **Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
 `state_getReadProof` on substrate) return answers that can be verified mathematically against
 the block's state root — no comparison node, no trust. Where the chain's clients emit proofs,
