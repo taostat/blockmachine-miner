@@ -15,10 +15,6 @@ services:
       BACKEND_WS_PORT: ${BACKEND_WS_PORT:-8546}
       METRICS_HOST: metrics
       METRICS_PORT: ${METRICS_PORT:-9100}
-      # The capacity helper runs on the host, not in this stack — it is a
-      # binary you install next to your node. Same route as the node itself.
-      CAPACITY_HELPER_HOST: ${CAPACITY_HELPER_HOST:-host.docker.internal}
-      CAPACITY_HELPER_PORT: ${CAPACITY_HELPER_PORT:-9955}
       SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/ssl/cert.pem}
       SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/ssl/key.pem}
     extra_hosts:

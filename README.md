@@ -4,7 +4,6 @@
 - [Node Eligibility Requirements](#node-eligibility-requirements)
 - [How you are paid](#how-you-are-paid)
 - [How routing works](#how-routing-works)
-- [Capacity helper (retired)](#capacity-helper-retired)
 - [Getting started](#getting-started)
 - [Pricing](#pricing)
 - [TLS options](#tls-options)
@@ -260,13 +259,6 @@ score = S × R^1.5 × L × Lr × P × T
 Your live score, its factors, your eligibility and payout estimates are public on the
 [miner performance page](https://blockmachine.io/miners). The full explanation is on the
 [incentive mechanism page](https://blockmachine.io/incentive-mechanism).
-
-## Capacity helper (retired)
-
-Capacity tests have ended. They no longer run and no longer affect routing or payouts, so the
-capacity helper has nothing to do. If you installed it, you can stop and remove it
-(`sudo systemctl disable --now capacity-helper` if you used the systemd unit). The gateway
-works the same with or without it.
 
 ## Getting started
 
@@ -558,8 +550,6 @@ Environment variables in `.env`:
 | `DOMAIN` | (empty) | Domain for Let's Encrypt auto-renewal |
 | `CHAIN` | `tao` | Chain selection |
 | `METRICS_PORT` | `9100` | Internal metrics exporter port |
-| `CAPACITY_HELPER_HOST` | `host.docker.internal` | Unused since capacity tests ended ([details](#capacity-helper-retired)); leave the default |
-| `CAPACITY_HELPER_PORT` | `9955` | Unused since capacity tests ended; leave the default |
 | `SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | TLS certificate path in container |
 | `SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | TLS key path in container |
 | `BM_MINER_GIT_SHA` | `unknown` | Deployed repository commit exposed in metrics |

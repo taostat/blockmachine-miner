@@ -55,36 +55,6 @@ server {
         proxy_send_timeout 3600s;
     }
 
-
-    # Capacity helper (optional, authenticated). This route is always here. It
-    # reaches a helper only if you run one, and answers 502 if you do not, which
-    # costs a node nothing: see the README.
-    #
-    # The helper's address is written into proxy_pass literally, so nginx looks
-    # it up once at startup using /etc/hosts — which is where Docker puts the
-    # host.docker.internal entry from extra_hosts. Holding it in a variable
-    # instead makes nginx ask a DNS resolver at request time, and Docker's DNS
-    # does not answer for host.docker.internal, so every capacity test would
-    # fail with 502. A stopped helper does not stop nginx starting; the name
-    # resolves whether or not anything is listening on the port.
-    location = /capacity-test {
-        if ($auth_ok = 0) {
-            return 401;
-        }
-
-        proxy_pass http://${CAPACITY_HELPER_HOST}:${CAPACITY_HELPER_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header Authorization $http_authorization;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-    }
-
     # Prometheus metrics endpoint (authenticated)
     location = /metrics {
         if ($auth_ok = 0) {
