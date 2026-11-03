@@ -22,7 +22,7 @@
 
 [Unit]
 Description=Blockmachine capacity helper
-Documentation=https://github.com/taostat/blockmachine-miner#capacity-helper-optional-archive-nodes
+Documentation=https://github.com/taostat/blockmachine-miner#capacity-helper-retired
 After=network-online.target
 Wants=network-online.target
 
