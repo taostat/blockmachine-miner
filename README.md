@@ -2,9 +2,9 @@
 
 - [How it works](#how-it-works)
 - [Node Eligibility Requirements](#node-eligibility-requirements)
-- [Capacity Testing](#capacity-testing)
-- [Capacity helper](#capacity-helper-optional-archive-nodes)
-- [Base Incentive](#base-incentive)
+- [How you are paid](#how-you-are-paid)
+- [How routing works](#how-routing-works)
+- [Capacity helper (retired)](#capacity-helper-retired)
 - [Getting started](#getting-started)
 - [Pricing](#pricing)
 - [TLS options](#tls-options)
@@ -29,9 +29,9 @@ Customer → Gateway → Your Node
 ```
 
 1. You run your own node for your chosen chain, fronted by our nginx gateway that authenticates requests from the Blockmachine network
-2. The protocol gateway routes customer RPC requests to your node based on quality score and price
+2. The protocol gateway routes customer RPC requests among eligible nodes by their live routing score (see [How routing works](#how-routing-works))
 3. Validators read gateway logs, verify correctness, and submit weights on-chain each epoch (~72 minutes)
-4. You earn emissions proportional to the CUs you served at your bid price
+4. Each chain's share of the miner pool goes to its busiest eligible nodes, split by CU served (see [How you are paid](#how-you-are-paid))
 
 ## Node Eligibility Requirements
 
@@ -207,338 +207,66 @@ because the chains run at different speeds:
   the payout set at all.
 - Fix the issue, pass the next test, and both come back automatically.
 
-## Capacity Testing
+## How you are paid
 
-Eligibility (see *Node Eligibility Requirements*) decides whether a node serves what the chain
-requires. **Capacity testing decides how much traffic an eligible node deserves.** It measures
-the hardware behind a node under a sudden heavy load and turns that into a multiplier on the
-node's routing weight. Operators who run genuinely strong hardware receive more requests and
-more incentive; operators who run many small boxes do not.
+Miners receive 41% of subnet 19 alpha emissions each epoch (7,200 blocks, about 24 hours).
+Under Bittensor's emission split, validators receive 41% and the subnet owner 18%. Customer
+payments are a separate flow.
 
-### What we measure
+- The miner pool is divided equally across the chains currently included in scoring.
+- On each chain, **90%** goes to the **five eligible UIDs that served the most CU on archive
+  requests** in the epoch, shared in proportion to that CU. A UID outside the top five gets no
+  part of this portion.
+- The other **10%** goes to the **ten UIDs eligible for the full-node tier that served the most
+  CU on non-archive requests**, shared in proportion to that CU.
+- A UID that is not eligible for a tier, or that served no CU in that tier's requests, receives
+  no share of it.
+- Validators turn each UID's dollar target into allocation weight using payout CU valued at
+  the bid. The bid changes how many payout CU represent that target; it does not change the
+  target's dollar value. Weights are shares of the miner pool, so a UID receives its share of
+  the 41%, not a guaranteed dollar amount.
 
-We take your node out of customer routing for a moment and fire **a burst of requests at it
-all at once**, the kind of work paying customers actually ask for, in four kinds:
+Eligibility lets a node take part. It does not guarantee traffic or income.
 
-| Workload | EVM chains | Weight | Tao | Weight |
-|---|---|---|---|---|
-| State | balances, nonces, storage, code and contract calls at old blocks | 15% | storage values at old blocks | 30% |
-| Heavy | traces of transactions and calls | 35% | pages of storage, key listings and runtime calls | 40% |
-| Indexed | log queries, receipts and transaction lookups | 35% | a block's events and block hashes | 20% |
-| Block | blocks and headers | 15% | blocks and headers | 10% |
+## How routing works
 
-Each workload's questions are sent together, over many connections at once, and the clock
-runs from the first question sent to the last correct answer received:
-
-- A correct answer inside the time limit counts the time it took.
-- An error, a malformed or incorrect answer, no answer, a refused connection, or an answer
-  that arrives after the limit costs a flat charge of **twice the limit**. The limit is
-  10 seconds for heavy work and for log queries on EVM chains, and 2 seconds for everything
-  else. A late answer is never cheaper than no answer, and no answer is never cheaper than
-  answering in time.
-
-**Lower is better.** Every question names the block it is about. The questions are standard
-read calls in many different shapes, drawn fresh for every run, so that what is measured is a
-node serving real requests rather than a node prepared for one particular request.
-
-Archive nodes are asked about historical blocks, the same questions for every archive node on
-the chain in that run, so results compare like for like, and every answer must be exactly
-right. Full nodes are asked about the newest blocks at the moment of the test, all full nodes
-on the chain at the same time.
-
-### What the score does
-
-For each workload, your multiplier is the best time on the chain against yours, capped at 1:
+Among eligible nodes on a chain, the gateway routes requests by each node's **live routing
+score**. A higher score makes a node more likely to receive requests, and so to serve more CU.
+It does not guarantee traffic or override eligibility.
 
 ```
-workload multiplier = best time ÷ your time      (at most 1.0)
-score               = the four workload multipliers, weighted by the table above
+score = S × R^1.5 × L × Lr × P × T
 ```
 
-The fastest node on a workload gets 1.0 for it. A node twice as slow gets 0.5. A node that
-refuses or times out on half of a burst pays the flat charge for every one of those requests
-and ends up near zero on that workload. The score concentrates traffic on the nodes that can
-take a surge and answer it fast: a fleet of small, slow boxes earns by quality, not by numbers.
+- **S, success rate:** falls as errors rise, reaching its 5% floor at 4.75% errors.
+- **R, reliability:** a day counts as good when at least 95% of its requests succeed. Only the
+  last three days count; R reaches full value after three good days.
+- **L, latency:** the rolling-hour p95. Full marks at or below 20 ms for archive nodes and
+  1 ms for full nodes, zero at 1,000 ms. In between,
+  `L = 1 − ((p95 − minimum) ÷ (1,000 ms − minimum))^0.3`. If the current hour has fewer than
+  100 requests, the last hour with enough requests is used.
+- **Lr, 15-second latency:** the same curve applied to the p95 of replies from the last 15
+  seconds, so a sudden slowdown lowers routing within seconds. Replies are capped at
+  1,000 ms, and a request still unanswered after one second counts as 1,000 ms. With fewer
+  than 20 replies in the window, Lr stays at 1. Lr changes a node's routing share, and so how
+  much CU it serves; it does not change the payout formula or eligibility.
+- **P, price:** the peer-group median bid divided by your bid, capped at 3; a zero bid scores
+  zero. The accepted bid is currently fixed at $0.50 per million CU, so P does not
+  distinguish nodes.
+- **T, slow responses:** the rolling-hour p99 compared with the higher of the chain's median
+  p99 and 100 ms. At or below that baseline T is 1; twice the baseline gives 0.5, with a 5%
+  floor.
 
-A node that gets not one question right on a workload, or that advertises archive and cannot
-answer archive questions, scores zero: that is a statement about what data it holds, not about
-how fast it is.
+Your live score, its factors, your eligibility and payout estimates are public on the
+[miner performance page](https://blockmachine.io/miners). The full explanation is on the
+[incentive mechanism page](https://blockmachine.io/incentive-mechanism).
 
-- The score scales your node's routing weight on that chain. Higher score, larger share of
-  traffic and incentive.
-- Scores are replaced by newer runs; they do not decay. A hardware upgrade shows up the next
-  time you are measured.
-- A run that could not measure your node fairly (a problem on our side, chain conditions)
-  writes no score. An inconclusive run never harms you.
-- Operators running nodes on several chains can expect those nodes to be tested **at the same
-  moment**. Nodes that share one machine slow down together, and the scores will say so.
+## Capacity helper (retired)
 
-### What we deliberately do not publish
-
-Which blocks are chosen and how, the exact questions in a run, how answers are checked, and
-the run schedule, and we change them. Every published detail becomes a thing to tune for
-instead of a thing to be. What we do publish is how you are marked (above) and the properties
-that make the test fair:
-
-- **The same questions for every node in a run**, fresh blocks every run, never the same block
-  twice to the same node. Caches and canned answers do not help.
-- **The workload is genuinely heavy.** Traces, historical state and log queries, not point
-  reads a hot cache serves in a millisecond. A connection cap or a request limit in front of
-  your node turns refused requests into flat charges; the only way to score is to serve the
-  burst.
-- **The test hits the endpoint you registered**, and the burst arrives with your node drained
-  of customer traffic, so it measures your node and nothing else. You may also run the optional
-  [capacity helper](#capacity-helper-optional-archive-nodes) at `/capacity-test` on that same
-  endpoint; it changes how much of an answer crosses the internet, never which questions are
-  asked or how they are marked.
-- **Distance from us is not scored.** Every connection is warmed with unscored reads before
-  the questions go out, and one round trip between our tester and your node is taken off each
-  workload's time.
-
-### Run the test yourself
-
-For an archive node you can download the questions from our last run on your chain, with the
-correct answers and the times the field managed, and put them to your own node as often as you
-like. Nothing it measures reaches us or changes your score.
-
-```bash
-bm miner capacity-pack --chain eth
-unzip capacity-test-eth.zip && cd capacity-test
-./run ws://your-node:8545
-```
-
-The zip carries the test program, `capacity-replay`. It is also published with each
-[release](https://github.com/taostat/blockmachine-miner/releases/latest) as
-`capacity-replay-linux-x86_64`, for running a pack you already have:
-
-```bash
-capacity-replay --pack pack.json --url ws://127.0.0.1:8545 --label "my node"
-```
-
-Your number will not match ours exactly: we measure your node through its registration with
-it out of customer traffic, and this measures it directly, while it serves. A pack is a record
-of a run that has already happened; every real run draws fresh questions, so practising
-against it gains nothing. Full nodes have no pack, because their questions are the newest
-blocks at the moment of the test.
-
-### Fairness commitments
-
-- Every node on a chain is measured on the same questions in the same run.
-- Inconclusive measurements never lower a score.
-- Scores, reasons and measurement times are visible to you.
-- Methodology changes are published before they change anyone's routing. This section is that
-  publication for the burst test.
-
-## Capacity helper (optional, archive nodes)
-
-The capacity test measures how fast your node computes answers. Some of those answers are
-megabytes long, and without help, the time they take to cross the internet to our tester is
-counted too, so a node far from the tester scores lower than the same node close to it.
-
-The **capacity helper** removes most of that. It is a small program that runs next to your node.
-During a capacity test it puts our questions to your node from inside your own server and sends
-back a short summary of each answer instead of the whole answer. A megabyte takes several trips
-across the internet to reach us and a short summary takes one, so what the helper removes is the
-extra cost of carrying large answers over distance.
-
-- **Optional.** Without it, your node is tested directly, the way every node with no
-  helper is.
-- **Archive nodes only, for now.** Full nodes are always tested directly.
-- **It can raise your score, and that moves where everyone stands.** A capacity score is
-  measured against the fastest node on your chain, so as nodes take up the helper the
-  standard rises and a node without one can score lower than it did, even though nothing
-  about it changed. We think that is the right trade: the time spent shipping a large
-  answer across the internet is not your node computing, and it should not have counted.
-  But it is a real effect and you should hear it from us.
-- **It does not change what we ask or how we mark it.** Customer traffic, eligibility, and
-  the questions stay the same, and your node is scored on the same answers it would have
-  given anyway.
-- **Light.** One program, using about 5 MB of memory when idle, and it does nothing at all
-  between tests.
-
-### Requirements
-
-- **Run it on the same machine as your node**, or at least on the same local network. If the
-  helper has to reach your node over the internet, you lose the benefit.
-- **It must be reachable at `/capacity-test` on the endpoint you registered**, with the same host and
-  port. If you registered `wss://203.0.113.10`, the helper must answer at
-  `wss://203.0.113.10/capacity-test`.
-- **It checks your node's Blockmachine secret** (`SECRET_V1` from your `.env`, the one you
-  registered) and refuses every connection without it.
-- **If your endpoint serves its own certificate**, which it does if you registered an IP
-  address rather than a domain, `capacity-helper check` needs that certificate's fingerprint
-  to connect. Run the check once without it and it prints the fingerprint, and the command to
-  run pinned to it. This affects the check only: we test your node against the certificate you
-  registered with us either way.
-- **It reads its secret once, when it starts.** So a secret rotation leaves it holding the
-  old one until you restart it. From `bm miner secret promote` onwards we present the new
-  secret, the helper refuses it, and your node is tested directly. Nothing is lost while that
-  is true — those runs are ordinary direct tests — but it does not fix itself, so the last
-  step of [Secret rotation](#secret-rotation-zero-downtime) is where you give the helper the
-  new secret and restart it.
-
-### Install it
-
-1. **Download it** from this repository's
-   [latest release](https://github.com/taostat/blockmachine-miner/releases/latest). It is one
-   file, for x86-64 and for arm64:
-
-   These run anywhere — your home directory is fine. They put the helper on your `PATH`
-   as `capacity-helper`:
-
-   ```bash
-   base=https://github.com/taostat/blockmachine-miner/releases/latest/download
-   asset="capacity-helper-linux-$(uname -m)"
-   curl -fsSLO "$base/$asset" -fsSLO "$base/SHA256SUMS"
-   sha256sum -c SHA256SUMS --ignore-missing
-   sudo install -m 0755 "$asset" /usr/local/bin/capacity-helper
-   ```
-
-   Check the checksum before you install it; `sha256sum -c` must say `OK`. Keep the
-   downloaded name until you have, because that is the name the checksums are written
-   against. Do not run these from a clone of this repository: there is a directory called
-   `capacity-helper` there, and installing onto that name would put the binary inside it.
-
-2. **Run it**, pointed at your node's WebSocket RPC port:
-
-   ```bash
-   CAPACITY_HELPER_SECRET='<your node secret>' capacity-helper \
-     --node ws://127.0.0.1:8546 \
-     --family evm \
-     --listen 127.0.0.1:9955
-   ```
-
-   - **`--node`:** your node's WebSocket RPC address as the helper sees it. On a tao node this
-     is typically `ws://127.0.0.1:9944`.
-   - **`--family`:** `evm` for every EVM chain, `substrate` for tao.
-   - **`--listen`:** where the helper answers. Which address is right depends on what
-     forwards `/capacity-test` to it:
-     - **Your own proxy, running directly on this machine:** use `127.0.0.1:9955`, so
-       nothing outside the machine can reach the helper at all.
-     - **The gateway stack in this repository:** the gateway is a container, and a
-       container's `127.0.0.1` is its own, not the host's — a helper on the host's
-       loopback is unreachable from it, and every capacity test gets a 502. Bind to the
-       address Docker gives the host instead:
-
-       ```bash
-       docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'
-       ```
-
-       That prints the address to use, almost always `172.17.0.1`, so the helper is
-       started with `--listen 172.17.0.1:9955`. `0.0.0.0:9955` also works, but then
-       block port 9955 at your firewall: the helper turns away anything without your
-       secret, but there is no reason to offer it to the internet.
-
-   To keep it running, there is a systemd unit at `capacity-helper/capacity-helper.service`
-   in this repository; its install steps are in the comment at the top of the file, and they
-   are meant to be run from the root of a clone of it.
-
-3. **Route `/capacity-test` to it.**
-
-   **If you run the gateway stack in this repository, the routing is already done** — it
-   sends `/capacity-test` to port 9955 on the host. The one thing you must get right is the
-   address the helper listens on, in the step above: the gateway cannot reach the host's
-   `127.0.0.1`. If you put the helper somewhere else entirely, set `CAPACITY_HELPER_HOST`
-   and `CAPACITY_HELPER_PORT` in `.env` and run `docker compose up -d gateway`.
-
-   The route is always present, whether or not you run a helper. With no helper behind it
-   a capacity test gets a 502 there and your node is tested directly, exactly as it is for
-   every node that runs no helper.
-
-   Otherwise, add the path to whatever terminates TLS on your registered endpoint. It is a
-   WebSocket connection, so pass the upgrade headers through, and pass `Authorization`
-   through unchanged.
-
-   nginx:
-   ```nginx
-   location = /capacity-test {
-       proxy_pass http://127.0.0.1:9955;
-       proxy_http_version 1.1;
-       proxy_set_header Upgrade $http_upgrade;
-       proxy_set_header Connection "upgrade";
-       proxy_set_header Authorization $http_authorization;
-       proxy_read_timeout 600s;
-   }
-   ```
-
-   Caddy:
-   ```caddy
-   handle /capacity-test {
-       reverse_proxy 127.0.0.1:9955
-   }
-   ```
-
-   If nothing sits in front of your node and it serves TLS itself, you need a reverse proxy
-   for this path. Without the helper, your node is tested directly.
-
-4. **Check it**, from anywhere:
-
-   ```bash
-   capacity-helper check --endpoint wss://203.0.113.10 --secret '<your node secret>'
-   ```
-
-   Put your own registered endpoint there, without a path. This connects to `/capacity-test`
-   exactly as our tester will, puts one question to your node through the helper, and prints
-   either `ok` or what is wrong. If your endpoint serves its own certificate, it prints that
-   certificate's fingerprint and the command to run pinned to it.
-
-
-### Keep it up to date
-
-Check which version you run with `capacity-helper --version`. **Run 0.3.0 or later.** An older
-helper cannot take part in the current test: our tester finds that out before the test starts
-and tests your node directly, so it costs you nothing, but it also gives you none of the
-helper's benefit. Version 0.1.0, from the first release, is too old on every chain; 0.2.0 is
-too old on Tao. Once you have the new file, `capacity-helper check` warns you if the helper
-answering on your endpoint is still an old one.
-
-To upgrade, download and install the new file exactly as in step 1, then restart the helper
-(`sudo systemctl restart capacity-helper` if you use the systemd unit). Your settings do not
-change.
-
-### What happens if the helper is down or misconfigured
-
-**If our tester cannot reach a working helper at `/capacity-test` when a test starts, it tests
-your node directly.** A helper that is stopped, crashed, not routed, or set to the wrong chain
-costs you nothing: we find out before the test begins and go straight to your node.
-
-**Once a test has started through your helper it is different.** From that point your node's
-questions go through it, and anything it does not deliver is charged to your node the same way
-it is when your node stops answering. That is true whether it stops part way through or never
-passes a single question on. So run it under something that keeps it up — the systemd unit in
-this repository restarts it — and use `capacity-helper check` after any change to your setup.
-
-## Base incentive
-
-Alongside what the network pays you for the traffic you serve, each chain has a **base
-incentive** — a separate payment shared out among the miners serving that chain. 90% of each
-chain's base incentive is set aside for its archive nodes, 10% for the lite nodes. The rule below is about that
-archive part, and it changes nothing about the rest.
-
-**The archive part is paid to the five archive nodes on each chain that served the most
-traffic.** On every chain, the eligible archive nodes that served the most traffic in an epoch
-are ranked, and the top five share that chain's archive base incentive in proportion to the
-traffic each of them served — a node's share is its traffic as a fraction of the traffic
-served by those five, not by the whole field. An archive node outside the top five on a chain
-receives no archive base incentive on that chain for that epoch.
-
-**You are still paid for every request you serve.** Base incentive is separate from, and
-additional to, what the network pays you for traffic. Falling outside the top five does not
-reduce what your served traffic earns, and it does not affect your eligibility, your routing,
-or any other chain you run a node on.
-
-An archive node outside the five still shares in the rest of the chain's base incentive for
-the recent-block traffic it serves, exactly as before.
-
-The ranking is redone every epoch, so a node can enter or leave the top five from one epoch to
-the next.
-
-We are making this change because fewer high capacity miners provides more stability for the
-product.
-
-Each chain is counted on its own. Being outside the five on one chain says nothing about where
-you stand on another, and on a chain with five or fewer eligible archive nodes every one of
-them is inside the five.
+Capacity tests have ended. They no longer run and no longer affect routing or payouts, so the
+capacity helper has nothing to do. If you installed it, you can stop and remove it
+(`sudo systemctl disable --now capacity-helper` if you used the systemd unit). The gateway
+works the same with or without it.
 
 ## Getting started
 
@@ -695,7 +423,7 @@ The endpoint includes Blockmachine-curated health metrics, host CPU/memory/load,
 
 You set a price in USD per Compute Unit (CU). A CU represents the normalized computational cost of serving a specific RPC method. Different methods cost different amounts of CU (a simple balance query costs less than a transaction trace).
 
-The gateway routes traffic based on a combination of quality score and price — cheaper miners with good quality get more traffic. You only earn on successful responses (HTTP 200 with a JSON-RPC `result`).
+Price is one factor in the routing score (see [How routing works](#how-routing-works)). The accepted bid is currently fixed at $0.50 per million CU, so price does not currently distinguish nodes. Only successful responses (HTTP 200 with a JSON-RPC `result`) count as CU served.
 
 Set or update your price:
 
@@ -780,12 +508,6 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 │  │          │─────▶│ host /proc       │      │
 │  └──────────┘      └──────────────────┘      │
 │                                              │
-│  ┌──────────┐      ┌──────────────────┐      │
-│  │ capacity │─────▶│ node RPC         │      │
-│  │ helper   │      │ (same machine)   │      │
-│  └──────────┘      └──────────────────┘      │
-│    ▲ /capacity-test (optional)               │
-│    │                                         │
 │  ┌──────────┐                                │
 │  │ certbot  │ (optional)                     │
 │  └──────────┘                                │
@@ -795,10 +517,6 @@ bm --testnet miner add --endpoint wss://$IP --alias my-node --secret "$SECRET" -
 - **nginx gateway** — Terminates TLS, authenticates requests via bearer token, proxies WebSocket and HTTP RPC to the chain node. Supports dual secrets for zero-downtime rotation. The eth gateway template routes by the `Upgrade` header so a single 443 endpoint serves both JSON-RPC and `eth_subscribe`.
 - **chain node** — yours: any accepted client for your chain, meeting the eligibility requirements for its declared type.
 - **metrics** — Exposes `/metrics` internally; nginx publishes it at `https://<endpoint>/metrics` with the same bearer auth as RPC.
-- **capacity helper** — Optional, archive nodes. Puts our capacity questions to your node from
-  inside your own server and returns a short summary of each answer, so the time a large answer
-  takes to cross the internet is not counted against you. nginx routes `/capacity-test` to it.
-  See [Capacity helper](#capacity-helper-optional-archive-nodes).
 - **certbot** — Optional. Auto-renews Let's Encrypt certificates. Only used with domain-based setups.
 
 ## Secret rotation (zero downtime)
@@ -828,11 +546,6 @@ Rotate your bearer token without dropping any traffic:
    # Edit .env: move SECRET_V2 value to SECRET_V1, clear SECRET_V2
    docker compose up -d gateway
    ```
-   **If you run the [capacity helper](#capacity-helper-optional-archive-nodes), give it the new
-   secret now too and restart it** — under systemd, that is the new value in
-   `/etc/blockmachine/capacity-helper.env` and `sudo systemctl restart capacity-helper`. It
-   reads its secret once when it starts, so until you do, it refuses our tests and your node is
-   tested directly. Nothing is lost while that is true, but it does not fix itself.
 
 ## Configuration
 
@@ -845,8 +558,8 @@ Environment variables in `.env`:
 | `DOMAIN` | (empty) | Domain for Let's Encrypt auto-renewal |
 | `CHAIN` | `tao` | Chain selection |
 | `METRICS_PORT` | `9100` | Internal metrics exporter port |
-| `CAPACITY_HELPER_HOST` | `host.docker.internal` | Where the gateway looks for the optional [capacity helper](#capacity-helper-optional-archive-nodes) |
-| `CAPACITY_HELPER_PORT` | `9955` | Port the capacity helper listens on |
+| `CAPACITY_HELPER_HOST` | `host.docker.internal` | Unused since capacity tests ended ([details](#capacity-helper-retired)); leave the default |
+| `CAPACITY_HELPER_PORT` | `9955` | Unused since capacity tests ended; leave the default |
 | `SSL_CERT_PATH` | `/etc/nginx/ssl/cert.pem` | TLS certificate path in container |
 | `SSL_KEY_PATH` | `/etc/nginx/ssl/key.pem` | TLS key path in container |
 | `BM_MINER_GIT_SHA` | `unknown` | Deployed repository commit exposed in metrics |
