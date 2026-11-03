@@ -210,18 +210,21 @@ because the chains run at different speeds:
 ## How you are paid
 
 Miners receive 41% of subnet 19 alpha emissions each epoch (7,200 blocks, about 24 hours).
-Validators receive 41% and the subnet owner 18%. Customer payments are a separate flow.
+Under Bittensor's emission split, validators receive 41% and the subnet owner 18%. Customer
+payments are a separate flow.
 
 - The miner pool is divided equally across the chains currently included in scoring.
-- On each chain, **90%** goes to the **five eligible archive nodes that served the most CU**
-  in the epoch, shared in proportion to their CU. An archive node outside the top five gets
-  no part of this portion.
-- The other **10%** goes to the **ten eligible full-node miners that served the most CU**,
-  shared in proportion to their CU.
-- A node that is not eligible, or that served no CU in its group, receives no share.
-- Validators turn each miner's dollar target into allocation weight using payout CU valued at
+- On each chain, **90%** goes to the **five eligible UIDs that served the most CU on archive
+  requests** in the epoch, shared in proportion to that CU. A UID outside the top five gets no
+  part of this portion.
+- The other **10%** goes to the **ten UIDs eligible for the full-node tier that served the most
+  CU on non-archive requests**, shared in proportion to that CU.
+- A UID that is not eligible for a tier, or that served no CU in that tier's requests, receives
+  no share of it.
+- Validators turn each UID's dollar target into allocation weight using payout CU valued at
   the bid. The bid changes how many payout CU represent that target; it does not change the
-  target's dollar value.
+  target's dollar value. Weights are shares of the miner pool, so a UID receives its share of
+  the 41%, not a guaranteed dollar amount.
 
 Eligibility lets a node take part. It does not guarantee traffic or income.
 
