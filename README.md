@@ -140,20 +140,13 @@ RETH_FB_WEBSOCKET_URL=wss://mainnet.flashblocks.base.org/ws
 
 That is Base's public mainnet Flashblocks feed and needs no key. If you start `base-reth-node` yourself, pass the same URL with `--flashblocks-url`. Once the node is up, its log shows `Starting Flashblocks RPC`, and an `eth_subscribe` to `newFlashblocks` over WebSocket returns a subscription id and then streams updates several times a second.
 
-**TAO requires unsafe RPC methods.** Every TAO node, full or archive, must serve `state_queryStorage` and `state_queryStorageAt`, and subtensor serves `state_queryStorage` only with unsafe RPC methods enabled. A node that refuses it (error `4003`, `RPC call is unsafe to be called externally`) is not eligible. Add this flag to the `node-subtensor` command line and restart the node:
+**TAO requires unsafe RPC methods.** Every TAO node, full or archive, must answer `state_queryStorage`. A node that refuses it with error `4003`, `RPC call is unsafe to be called externally`, is not eligible. Add this flag to the `node-subtensor` command line and restart the node:
 
 ```
 --rpc-methods=unsafe
 ```
 
-Keep `--rpc-external` (or `--unsafe-rpc-external`, which is equivalent) so the node still listens on its external interface; on its own, `--rpc-external` serves only the safe method set. Unsafe methods include administrative calls, so do not leave the node's RPC port open to the internet: allow only the miner gateway to reach it. To check, query the node's RPC port directly from the gateway host (`9944` by default):
-
-```
-HASH=$(curl -s -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"chain_getFinalizedHead","params":[]}' http://YOUR_NODE:9944 | jq -r .result)
-curl -s -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"state_queryStorage","params":[["0x26aa394eea5630e07c48ae0c9558cef702a5c1b19ab7a04f536c519aca4983ac"],"'"$HASH"'"]}' http://YOUR_NODE:9944
-```
-
-A node that meets the requirement returns a `result` list of `block` and `changes` entries; error `4003` with the message `RPC call is unsafe to be called externally` means the flag is not in effect. Applies from the eligibility run after this note is published.
+Keep `--rpc-external`; on its own it serves only the safe method set. Unsafe methods include administrative calls, so do not leave the node's RPC port open to the internet: allow only the miner gateway to reach it.
 
 **Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
 `state_getReadProof` on substrate) return answers that can be verified mathematically against
