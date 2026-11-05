@@ -140,6 +140,14 @@ RETH_FB_WEBSOCKET_URL=wss://mainnet.flashblocks.base.org/ws
 
 That is Base's public mainnet Flashblocks feed and needs no key. If you start `base-reth-node` yourself, pass the same URL with `--flashblocks-url`. Once the node is up, its log shows `Starting Flashblocks RPC`, and an `eth_subscribe` to `newFlashblocks` over WebSocket returns a subscription id and then streams updates several times a second.
 
+**TAO requires unsafe RPC methods.** Every TAO node, full or archive, must answer `state_queryStorage`. A node that refuses it with error `4003`, `RPC call is unsafe to be called externally`, is not eligible. Add this flag to the `node-subtensor` command line and restart the node:
+
+```
+--rpc-methods=unsafe
+```
+
+Keep `--rpc-external`; on its own it serves only the safe method set. Unsafe methods include administrative calls, so do not leave the node's RPC port open to the internet: allow only the miner gateway to reach it.
+
 **Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
 `state_getReadProof` on substrate) return answers that can be verified mathematically against
 the block's state root — no comparison node, no trust. Where the chain's clients emit proofs,
