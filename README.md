@@ -140,6 +140,21 @@ RETH_FB_WEBSOCKET_URL=wss://mainnet.flashblocks.base.org/ws
 
 That is Base's public mainnet Flashblocks feed and needs no key. If you start `base-reth-node` yourself, pass the same URL with `--flashblocks-url`. Once the node is up, its log shows `Starting Flashblocks RPC`, and an `eth_subscribe` to `newFlashblocks` over WebSocket returns a subscription id and then streams updates several times a second.
 
+**TAO requires unsafe RPC methods.** Every TAO node, full or archive, must be started with unsafe RPC methods enabled, so that it answers `state_queryStorage` and `state_queryStorageAt`. A node that refuses them (error `4003`, `RPC call is unsafe to be called externally`) is not eligible. Add this flag to the `node-subtensor` command line and restart the node:
+
+```
+--rpc-methods=unsafe
+```
+
+Keep `--rpc-external` (or `--unsafe-rpc-external`, the same setting without the startup warning) so the node still listens on the endpoint you registered; on its own, `--rpc-external` serves only the safe method set. Check from a machine other than the node itself, because a node always allows unsafe methods on `localhost`:
+
+```
+HASH=$(curl -s -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"chain_getFinalizedHead","params":[]}' http://YOUR_NODE:9944 | jq -r .result)
+curl -s -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"state_queryStorage","params":[["0x26aa394eea5630e07c48ae0c9558cef702a5c1b19ab7a04f536c519aca4983ac"],"'"$HASH"'"]}' http://YOUR_NODE:9944
+```
+
+A node that meets the requirement returns a `result` list of `block` and `changes` entries; error `4003` means the flag is not in effect. Applies from the eligibility run after this note is published.
+
 **Why proofs are first-class.** Proof-emitting methods (`eth_getProof` on EVM chains,
 `state_getReadProof` on substrate) return answers that can be verified mathematically against
 the block's state root — no comparison node, no trust. Where the chain's clients emit proofs,
