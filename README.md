@@ -146,7 +146,7 @@ That is Base's public mainnet Flashblocks feed and needs no key. If you start `b
 --rpc-methods=unsafe
 ```
 
-Keep `--rpc-external` (or `--unsafe-rpc-external`, the same setting without the startup warning) so the node still listens on the endpoint you registered; on its own, `--rpc-external` serves only the safe method set. Check from a machine other than the node itself, because a node always allows unsafe methods on `localhost`:
+Keep `--rpc-external` (or `--unsafe-rpc-external`, the same setting without the startup warning) so the node still listens on its external interface; on its own, `--rpc-external` serves only the safe method set. To check, query the node's RPC port directly (`9944` by default):
 
 ```
 HASH=$(curl -s -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"chain_getFinalizedHead","params":[]}' http://YOUR_NODE:9944 | jq -r .result)
