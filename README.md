@@ -365,6 +365,8 @@ bm --testnet miner add \
 
 Or run `bm miner add` with no flags for interactive prompts.
 
+`bm miner add --region us-east` registers the node for the US East region (default `eu`). Each region's registration is separate, with its own node id, secret and eligibility. Pass `--region us-east` to `rm`, `update`, `secret ...` and `show` to act on the US East registration. US East is not serving traffic yet and does not earn yet; this will be announced.
+
 **What happens during registration:**
 - The CLI connects to the registry and creates your node entry
 - For IP-based endpoints, the CLI fetches and pins your TLS certificate fingerprint (so the gateway can verify your identity via cert pinning)
