@@ -47,7 +47,7 @@ nodes on other chains.
 | U4 | **At the tip** | The node tracks the chain head. It must stay within **90 seconds of chain progress** of the highest head we can see on that chain — see *Staying at the tip* below for the per-chain block allowance. A node that persistently lags the network tip is not serving the chain. |
 | U5 | **Standard responses** | Correct JSON-RPC 2.0 shapes, including on errors. Proxies that return HTML error pages, rewrite error codes, or inject non-standard responses fail this. |
 | U6 | **Standard subscriptions** | `eth_subscribe(["newHeads"])` (or substrate equivalent) must work and actually deliver notifications. |
-| U7 | **Consistent identity** | `web3_clientVersion` reports a real client honestly, matching the chain's accepted-client list (enforced at registration and re-checked continuously). Masking what you run is an eligibility failure. Known exception: Avalanche's coreth reports a bare version string with no client name, so Avalanche uses chain-ID + behaviour checks instead of a name match — an honest coreth node is never failed for its client string. |
+| U7 | **Consistent identity** | For EVM nodes, `web3_clientVersion` must match the chain's accepted-client list (enforced at registration and re-checked continuously). Masking what you run is an eligibility failure. |
 | U8 | **Continuous service** | A required feature must be served **continuously**, not occasionally. A feature that works some of the time is treated as not served. (Brief reconnect blips are tolerated; flapping is not.) |
 
 ### Archive node requirements
@@ -88,6 +88,8 @@ A node declared **full** must serve the chain head and the recent range correctl
   - **Polygon: the last 250 blocks.** Polygon makes a block every 2 seconds, so 100 blocks is
     three minutes of history; 250 blocks (about eight minutes) is the floor a full node must
     serve. Applies from the eligibility run after this note is published.
+  - **Arc: the last 395 blocks.** A full node must serve blocks, state, logs and transaction
+    lookups across this range.
   - **Ethereum: the last 10,000 blocks.** This is not a new demand on your hardware: it is
     what reth `--minimal` and erigon `--prune.distance=10064` already retain by default, less
     a small safety margin, and it is the depth the gateway has always routed to non-archive
@@ -118,27 +120,28 @@ A node declared **full** must serve the chain head and the recent range correctl
 
 | Chain | Accepted client families | Mempool | Trace/debug | State proofs |
 |---|---|---|---|---|
-| **Ethereum** (`eth`, chain-id 1) | **reth** — run this. (erigon is also accepted, but only because we operate one erigon node ourselves for proof-based verification; miners should run reth.) | ✅ | ✅ | ❌ |
-| **BSC** (`bsc`, 56) | geth (bsc-geth), reth (reth-bsc) | ✅ | ✅ | ✅ |
-| **Base** (`base`, 8453) | reth | ❌ | ✅ | ✅ |
-| **Optimism** (`optimism`, 10) | reth (op-reth) | ✅ | ✅ | ✅ |
-| **Polygon** (`polygon`, 137) | bor | ✅ | ✅ | ✅ |
-| **Avalanche C-Chain** (`avalanche`, 43114) | coreth / avalanchego (see U7 exception) | ❌ | ✅ | ✅ |
-| **Scroll** (`scroll`, 534352) | geth (scroll-geth) | ✅ | ✅ | ✅ |
-| **Mantle** (`mantle`, 5000) | geth (mantle op-geth) | ❌ | ✅ | ✅ |
-| **Arbitrum One** (`arbitrum`, 42161) | nitro (a geth fork — either name is accepted in the version string) | ❌ | ✅ | ✅ |
-| **Robinhood Chain** (`robinhood`, 4663) | nitro (as above) | ❌ | ✅ | ✅ |
+| **Ethereum** (`eth`, chain-id 1) | reth, erigon, ethrex | ✅ | ✅ | ❌ |
+| **BSC** (`bsc`, 56) | geth, reth | ✅ | ✅ | ✅ |
+| **Base** (`base`, 8453) | geth, reth | ❌ | ✅ | ✅ |
+| **Optimism** (`optimism`, 10) | geth, reth | ✅ | ✅ | ✅ |
+| **Polygon** (`polygon`, 137) | bor, erigon, geth | ✅ | ✅ | ✅ |
+| **Arc** (`arc`, chain-id 5042) | reth | ❌ | ✅ | ✅ |
+| **Scroll** (`scroll`, 534352) | geth, reth | ✅ | ✅ | ✅ |
+| **Mantle** (`mantle`, 5000) | geth, reth | ❌ | ✅ | ✅ |
+| **Arbitrum One** (`arbitrum`, 42161) | geth, nitro | ❌ | ✅ | ✅ |
+| **Robinhood Chain** (`robinhood`, 4663) | geth, nitro | ❌ | ✅ | ✅ |
 | **TAO (Bittensor)** (`tao`) | subtensor | ✅ | ❌ | ✅ |
 
-**Why Base has no mempool requirement.** Base's sequencer is private: public nodes cannot observe a meaningful pending-transaction feed, so there is nothing a node could serve and nothing we could fairly measure. Mempool is therefore not required on Base (same as the other chains marked ❌).
+Mempool is not required on Base, Mantle, Arbitrum, or Robinhood (private sequencers) or Arc (only
+validators hold its pending pool; miner nodes receive no pending transactions).
 
-**Base requires Flashblocks.** Every Base node, full or archive, must have Flashblocks enabled, so that customers can use the `newFlashblocks` and `pendingLogs` subscriptions. A Base node without Flashblocks is not eligible. On the official Base node image (`ghcr.io/base/node`), set this environment variable on the execution client and restart it:
+**Arc RPC methods.** To enable Arc-specific JSON-RPC methods, start the node with:
 
 ```
-RETH_FB_WEBSOCKET_URL=wss://mainnet.flashblocks.base.org/ws
+--enable-arc-rpc
 ```
 
-That is Base's public mainnet Flashblocks feed and needs no key. If you start `base-reth-node` yourself, pass the same URL with `--flashblocks-url`. Once the node is up, its log shows `Starting Flashblocks RPC`, and an `eth_subscribe` to `newFlashblocks` over WebSocket returns a subscription id and then streams updates several times a second.
+Arc nodes must also expose the `debug` and `trace` RPC namespaces to satisfy the trace/debug requirement above.
 
 **TAO requires unsafe RPC methods.** Every TAO node, full or archive, must answer `state_queryStorage`. A node that refuses it with error `4003`, `RPC call is unsafe to be called externally`, is not eligible. Add this flag to the `node-subtensor` command line and restart the node:
 
@@ -168,10 +171,10 @@ because the chains run at different speeds:
 |---|---|---|
 | **Ethereum** (`eth`) | 9 blocks | 55 blocks |
 | **BSC** (`bsc`) | 208 | 1,385 |
-| **Base** (`base`) | 46 | 305 |
+| **Base** (`base`) | 458 | 3,050 |
 | **Optimism** (`optimism`) | 48 | 320 |
 | **Polygon** (`polygon`) | 63 | 415 |
-| **Avalanche C-Chain** (`avalanche`) | 93 | 615 |
+| **Arc** (`arc`) | 188 | 1,250 |
 | **Scroll** (`scroll`) | 90 | 595 |
 | **Mantle** (`mantle`) | 48 | 315 |
 | **Arbitrum One** (`arbitrum`) | 378 | 2,515 |
