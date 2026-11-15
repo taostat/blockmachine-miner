@@ -49,6 +49,7 @@ nodes on other chains.
 | U6 | **Standard subscriptions** | `eth_subscribe(["newHeads"])` (or substrate equivalent) must work and actually deliver notifications. |
 | U7 | **Consistent identity** | For EVM nodes, `web3_clientVersion` must match the chain's accepted-client list (enforced at registration and re-checked continuously). Masking what you run is an eligibility failure. |
 | U8 | **Continuous service** | A required feature must be served **continuously**, not occasionally. A feature that works some of the time is treated as not served. (Brief reconnect blips are tolerated; flapping is not.) |
+| U9 | **One UID per operator** | Running multiple UIDs from the same machines or IP addresses, or splitting one operation across coldkeys to gain additional ranking slots, is Sybil activity. All involved coldkeys will be banned, and their nodes removed from customer traffic and payout. |
 
 ### Archive node requirements
 
